@@ -1,73 +1,173 @@
-# Welcome to your Lovable project
+# MedRAG - Hospital RAG System Demo
 
-## Project info
+## 🏥 Project Overview
 
-**URL**: https://lovable.dev/projects/818770e7-0b13-408f-b02d-d5ff051e8fc4
+MedRAG is an intelligent hospital management system that uses Retrieval-Augmented Generation (RAG) to process medical documents and provide AI-powered assistance to patients and hospital staff. This demo showcases a modern web interface for the complete system.
 
-## How can I edit this code?
+## ✨ Features
 
-There are several ways of editing your application.
+### 👥 Role-Based Access
+- **Patient Interface**: Chat-based AI assistant for finding doctor information, appointments, and hospital services
+- **Hospital Manager Dashboard**: Analytics, document management, and system oversight
+- **Voice Interface**: Speech-to-text interaction for accessibility
 
-**Use Lovable**
+### 🤖 AI-Powered Capabilities
+- **Document Processing**: Upload and process PDFs and text files containing doctor profiles and medical information
+- **Natural Language Queries**: Ask questions in plain English about doctors, appointments, and hospital policies
+- **Smart Responses**: Context-aware answers based on uploaded documents
+- **Voice Interaction**: Hands-free conversation with the AI assistant
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/818770e7-0b13-408f-b02d-d5ff051e8fc4) and start prompting.
+### 📊 Management Features
+- **Analytics Dashboard**: Usage statistics, query tracking, and performance metrics
+- **Document Management**: Upload, process, and monitor medical documents
+- **Query Logging**: Track all patient interactions for quality assurance
+- **Real-time Monitoring**: Live statistics and system health metrics
 
-Changes made via Lovable will be committed automatically to this repo.
+## 🏗️ Technical Architecture
 
-**Use your preferred IDE**
+### Frontend Stack
+- **React 18** with TypeScript
+- **Tailwind CSS** for styling with custom medical theme
+- **shadcn/ui** component library
+- **React Router** for navigation
+- **React Query** for state management
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Planned Backend Integration (Requires Supabase)
+- **Document Storage**: Secure file upload and management
+- **Vector Database**: Embeddings for semantic search
+- **Edge Functions**: AI processing with OpenAI/Azure integration
+- **Authentication**: Role-based access control
+- **Real-time Features**: Live chat and notifications
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+## 🚀 Getting Started
 
-Follow these steps:
+### Demo Mode (Current)
+The current implementation is a fully functional demo with:
+- Beautiful, responsive UI
+- Mock data and simulated interactions
+- Complete user flows for both patients and managers
+- Voice interface simulation
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+### Production Setup (Requires Supabase)
+To implement the full RAG system:
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+1. **Connect to Supabase**
+   - Click the Supabase button in Lovable
+   - Set up database tables for documents, users, and queries
+   - Configure authentication and RLS policies
 
-# Step 3: Install the necessary dependencies.
-npm i
+2. **Add AI Integration**
+   - Configure OpenAI or Azure OpenAI API keys
+   - Set up edge functions for document processing
+   - Implement vector embeddings for semantic search
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+3. **Document Processing Pipeline**
+   - PDF text extraction
+   - Text chunking and embedding generation
+   - Vector storage and retrieval
+
+## 📋 Implementation Plan
+
+### Phase 1: Backend Setup ✅ (Demo Complete)
+- [x] UI/UX Design System
+- [x] Component Architecture
+- [x] Routing and Navigation
+- [x] Mock Data Integration
+
+### Phase 2: Supabase Integration (Next Steps)
+- [ ] Database schema design
+- [ ] Authentication system
+- [ ] File storage configuration
+- [ ] Edge function setup
+
+### Phase 3: AI Integration
+- [ ] OpenAI/Azure API integration
+- [ ] Document processing pipeline
+- [ ] Vector database setup
+- [ ] RAG query implementation
+
+### Phase 4: Advanced Features
+- [ ] Real-time chat
+- [ ] Voice-to-text integration
+- [ ] Advanced analytics
+- [ ] Mobile responsiveness
+
+## 🔧 Configuration
+
+### Environment Variables (Supabase)
+```env
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
+OPENAI_API_KEY=your_openai_api_key
+AZURE_OPENAI_ENDPOINT=your_azure_endpoint
+```
+
+### Document Processing Settings
+- **Supported Formats**: PDF, TXT, DOCX
+- **Max File Size**: 10MB per document
+- **Processing Time**: ~30 seconds per document
+- **Embedding Model**: text-embedding-ada-002 (OpenAI) or text-embedding-ada-002 (Azure)
+
+## 🎯 User Flows
+
+### Patient Journey
+1. **Access System** → Select "Patient Access"
+2. **Chat Interface** → Ask questions about doctors/appointments
+3. **Voice Option** → Switch to voice interaction if needed
+4. **Get Answers** → Receive AI-powered responses based on hospital documents
+
+### Manager Journey
+1. **Admin Access** → Select "Hospital Manager"
+2. **Dashboard Overview** → View system statistics and metrics
+3. **Document Management** → Upload and process new medical documents
+4. **Query Analysis** → Review patient interactions and system performance
+
+## 🔒 Security & Compliance
+
+- **Role-Based Access Control**: Separate interfaces for patients vs managers
+- **Data Privacy**: Patient queries are logged anonymously
+- **Document Security**: Encrypted storage and processing
+- **HIPAA Considerations**: Designed with healthcare privacy in mind
+
+## 📱 Responsive Design
+
+- **Mobile-First**: Optimized for all device sizes
+- **Accessibility**: WCAG 2.1 compliant design
+- **Performance**: Optimized loading and interactions
+- **PWA Ready**: Can be installed as a progressive web app
+
+## 🛠️ Development
+
+### Local Development
+```bash
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+### Build for Production
+```bash
+npm run build
+```
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### Deploy
+Use Lovable's built-in deployment or connect to your preferred hosting platform.
 
-**Use GitHub Codespaces**
+## 📈 Future Enhancements
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+- **Multi-language Support**: Translate interface and AI responses
+- **Advanced Analytics**: Machine learning insights on query patterns
+- **Integration APIs**: Connect with existing hospital systems
+- **Mobile App**: Native iOS/Android applications
+- **Workflow Automation**: Automated appointment scheduling
 
-## What technologies are used for this project?
+## 🤝 Contributing
 
-This project is built with:
+This is a proof-of-concept demo. For production implementation, connect to Supabase and follow the implementation plan above.
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## 📄 License
 
-## How can I deploy this project?
+This project is part of a demonstration for hospital management systems. All medical data used is fictional and for demo purposes only.
 
-Simply open [Lovable](https://lovable.dev/projects/818770e7-0b13-408f-b02d-d5ff051e8fc4) and click on Share -> Publish.
+---
 
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+**Ready to implement the full RAG system?** Connect to Supabase to unlock the complete functionality with real document processing, AI integration, and database storage.
