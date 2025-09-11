@@ -1,0 +1,30 @@
+# FastAPI and server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# RAG pipeline components
+langchain==0.1.0
+langchain-community==0.0.10
+langchain-text-splitters==0.0.1
+langchain-chroma==0.1.0
+langchain-huggingface==0.0.1
+chromadb==0.4.22
+sentence-transformers==2.2.2
+
+# Document processing
+pypdf==3.17.4
+python-docx==1.1.0
+markdown==3.5.2
+
+# LLM provider
+openai>=1.30.0
+
+# Utilities
+tiktoken==0.5.2
+python-dotenv==1.0.0
+pydantic==2.5.0
+
+# Development
+pytest==7.4.3
+httpx==0.25.2
