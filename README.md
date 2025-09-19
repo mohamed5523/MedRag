@@ -7,17 +7,20 @@ MedRAG is an intelligent hospital management system that uses Retrieval-Augmente
 ## ✨ Features
 
 ### 👥 Role-Based Access
+
 - **Patient Interface**: Chat-based AI assistant for finding doctor information, appointments, and hospital services
 - **Hospital Manager Dashboard**: Analytics, document management, and system oversight
 - **Voice Interface**: Speech-to-text interaction for accessibility
 
 ### 🤖 AI-Powered Capabilities
+
 - **Document Processing**: Upload and process PDFs and text files containing doctor profiles and medical information
 - **Natural Language Queries**: Ask questions in plain English about doctors, appointments, and hospital policies
 - **Smart Responses**: Context-aware answers based on uploaded documents
 - **Voice Interaction**: Hands-free conversation with the AI assistant
 
 ### 📊 Management Features
+
 - **Analytics Dashboard**: Usage statistics, query tracking, and performance metrics
 - **Document Management**: Upload, process, and monitor medical documents
 - **Query Logging**: Track all patient interactions for quality assurance
@@ -26,6 +29,7 @@ MedRAG is an intelligent hospital management system that uses Retrieval-Augmente
 ## 🏗️ Technical Architecture
 
 ### Frontend Stack
+
 - **React 18** with TypeScript
 - **Tailwind CSS** for styling with custom medical theme
 - **shadcn/ui** component library
@@ -33,6 +37,7 @@ MedRAG is an intelligent hospital management system that uses Retrieval-Augmente
 - **React Query** for state management
 
 ### Planned Backend Integration (Requires Supabase)
+
 - **Document Storage**: Secure file upload and management
 - **Vector Database**: Embeddings for semantic search
 - **Edge Functions**: AI processing with OpenAI/Azure integration
@@ -42,13 +47,16 @@ MedRAG is an intelligent hospital management system that uses Retrieval-Augmente
 ## 🚀 Getting Started
 
 ### Demo Mode (Current)
+
 The current implementation is a fully functional demo with:
+
 - Beautiful, responsive UI
 - Mock data and simulated interactions
 - Complete user flows for both patients and managers
 - Voice interface simulation
 
 ### Production Setup (Requires Supabase)
+
 To implement the full RAG system:
 
 1. **Connect to Supabase**
@@ -69,24 +77,28 @@ To implement the full RAG system:
 ## 📋 Implementation Plan
 
 ### Phase 1: Backend Setup ✅ (Demo Complete)
+
 - [x] UI/UX Design System
 - [x] Component Architecture
 - [x] Routing and Navigation
 - [x] Mock Data Integration
 
 ### Phase 2: Supabase Integration (Next Steps)
+
 - [ ] Database schema design
 - [ ] Authentication system
 - [ ] File storage configuration
 - [ ] Edge function setup
 
 ### Phase 3: AI Integration
+
 - [ ] OpenAI/Azure API integration
 - [ ] Document processing pipeline
 - [ ] Vector database setup
 - [ ] RAG query implementation
 
 ### Phase 4: Advanced Features
+
 - [ ] Real-time chat
 - [ ] Voice-to-text integration
 - [ ] Advanced analytics
@@ -95,6 +107,7 @@ To implement the full RAG system:
 ## 🔧 Configuration
 
 ### Environment Variables (Supabase)
+
 ```env
 SUPABASE_URL=your_supabase_url
 SUPABASE_ANON_KEY=your_supabase_anon_key
@@ -103,6 +116,7 @@ AZURE_OPENAI_ENDPOINT=your_azure_endpoint
 ```
 
 ### Document Processing Settings
+
 - **Supported Formats**: PDF, TXT, DOCX
 - **Max File Size**: 10MB per document
 - **Processing Time**: ~30 seconds per document
@@ -111,12 +125,14 @@ AZURE_OPENAI_ENDPOINT=your_azure_endpoint
 ## 🎯 User Flows
 
 ### Patient Journey
+
 1. **Access System** → Select "Patient Access"
 2. **Chat Interface** → Ask questions about doctors/appointments
 3. **Voice Option** → Switch to voice interaction if needed
 4. **Get Answers** → Receive AI-powered responses based on hospital documents
 
 ### Manager Journey
+
 1. **Admin Access** → Select "Hospital Manager"
 2. **Dashboard Overview** → View system statistics and metrics
 3. **Document Management** → Upload and process new medical documents
@@ -139,18 +155,46 @@ AZURE_OPENAI_ENDPOINT=your_azure_endpoint
 ## 🛠️ Development
 
 ### Local Development
+
 ```bash
+# 1) Install Node deps (root) and Python deps (backend)
 npm install
+python -m venv .venv && source .venv/bin/activate
+pip install -r backend/requirements.txt || uv pip install -r backend/requirements.txt
+
+# 2) Set environment variables
+# Create a .env file at project root (used by Vite) with:
+# VITE_SUPABASE_URL=your_supabase_url
+# VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+# Optionally set backend env in backend/.env:
+# OPENAI_API_KEY=your_openai_api_key
+# API_HOST=0.0.0.0
+# API_PORT=8000
+
+# 3) Run frontend and backend together
 npm run dev
 ```
 
 ### Build for Production
+
 ```bash
 npm run build
 ```
 
 ### Deploy
+
 Use Lovable's built-in deployment or connect to your preferred hosting platform.
+
+## 🔌 Supabase Integration
+
+- Frontend reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from environment variables (no keys are hardcoded).
+- Database schema and RLS policies are provided under `supabase/migrations/` (profiles, documents, doctors, schedules, appointments, chat_logs, document_embeddings, and a private `documents` storage bucket).
+- Manager dashboard uses Supabase Storage (bucket `documents`) and the `documents` table for metadata. Ensure storage policies from migrations are applied.
+- Authentication and profiles are handled by `src/hooks/useAuth.tsx` using Supabase Auth and a `profiles` table (with roles: patient, staff, manager).
+
+## ▶️ One-Command Dev
+
+The root script `npm run dev` runs both the Vite frontend (port 8080 with API proxy) and the FastAPI backend (port 8000). The proxy forwards `/api`, `/health`, and `/docs` to the backend.
 
 ## 📈 Future Enhancements
 

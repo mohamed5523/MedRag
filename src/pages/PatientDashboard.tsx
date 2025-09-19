@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ArrowLeft, MessageCircle, Mic, Send, User, Bot, Phone } from "lucide-react";
+import { ArrowLeft, MessageCircle, Mic, Send, User, Bot, Phone, LogOut } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 
 interface Message {
   id: string;
@@ -17,6 +18,7 @@ interface Message {
 const PatientDashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { signOut } = useAuth();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -126,6 +128,12 @@ const PatientDashboard = () => {
               </div>
               <h1 className="text-xl font-bold text-medical-dark">Patient Assistant</h1>
             </div>
+            <div className="ml-auto">
+              <Button variant="outline" size="sm" onClick={signOut}>
+                <LogOut className="w-4 h-4 mr-2" />
+                Sign Out
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -162,15 +170,15 @@ const PatientDashboard = () => {
                     className={`flex gap-3 ${message.sender === 'user' ? 'flex-row-reverse' : ''}`}
                   >
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center ${message.sender === 'user'
-                        ? 'bg-primary text-white'
-                        : 'bg-accent text-white'
+                      ? 'bg-primary text-white'
+                      : 'bg-accent text-white'
                       }`}>
                       {message.sender === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                     </div>
                     <div className={`max-w-[80%] ${message.sender === 'user' ? 'text-right' : ''}`}>
                       <div className={`inline-block p-3 rounded-2xl ${message.sender === 'user'
-                          ? 'bg-primary text-white'
-                          : 'bg-muted text-foreground'
+                        ? 'bg-primary text-white'
+                        : 'bg-muted text-foreground'
                         }`}>
                         <p className="text-sm">{message.text}</p>
                       </div>
