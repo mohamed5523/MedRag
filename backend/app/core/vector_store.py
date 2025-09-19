@@ -1,6 +1,7 @@
+import logging
 from pathlib import Path
 from typing import List, Optional
-import logging
+
 from langchain.schema import Document
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings

@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException
 import time
 import logging
-from typing import List
 
 from ..core.vector_store import VectorStore
 from ..core.qa_engine import QAEngine

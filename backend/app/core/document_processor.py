@@ -37,7 +37,7 @@ class DocumentProcessor:
     @staticmethod
     def _extract_from_pdf(file_path: Path) -> str:
         """Extract text from PDF file."""
-        reader = PdfReader(str(file_path))
+        reader = PdfReader(str(file_path)) 
         text_parts = []
         
         for page in reader.pages:
@@ -74,3 +74,4 @@ class DocumentProcessor:
     def is_supported_file(filename: str) -> bool:
         """Check if file extension is supported."""
         return Path(filename).suffix.lower() in DocumentProcessor.get_supported_extensions()
+    

@@ -28,26 +28,26 @@ const PatientDashboard = () => {
   const [inputMessage, setInputMessage] = useState("");
   const [isListening, setIsListening] = useState(false);
 
-  // Mock responses for demonstration
+  // Mock responses for fallback when backend is unavailable
   const generateBotResponse = (userMessage: string): string => {
     const message = userMessage.toLowerCase();
-    
+
     if (message.includes('doctor') || message.includes('physician')) {
       return "I found several doctors in our system. Dr. Sarah Johnson is available for cardiology consultations on weekdays 9-5. Dr. Michael Chen specializes in orthopedics and has openings this Thursday. Would you like more details about any specific doctor?";
     }
-    
+
     if (message.includes('appointment') || message.includes('schedule')) {
       return "I can help you with appointment information. Currently, we have availability with Dr. Johnson tomorrow at 2:30 PM and Dr. Chen on Friday at 10:00 AM. Which would work better for you?";
     }
-    
+
     if (message.includes('emergency') || message.includes('urgent')) {
       return "For medical emergencies, please call 911 immediately. For urgent but non-emergency situations, our urgent care is open 24/7 at the main hospital building, Level 2.";
     }
-    
+
     return "I understand you're asking about '" + userMessage + "'. Based on our hospital database, I'd be happy to help you find more specific information. Could you please provide more details about what you're looking for?";
   };
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!inputMessage.trim()) return;
 
     const userMessage: Message = {
@@ -58,18 +58,40 @@ const PatientDashboard = () => {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const outgoing = inputMessage;
     setInputMessage("");
 
-    // Simulate bot response
-    setTimeout(() => {
+    try {
+      const resp = await fetch("/api/chat/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: outgoing, max_results: 5 })
+      });
+
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      const data = await resp.json();
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: generateBotResponse(inputMessage),
+        text: data.answer ?? generateBotResponse(outgoing),
         sender: 'bot',
         timestamp: new Date()
       };
       setMessages(prev => [...prev, botMessage]);
-    }, 1000);
+    } catch (err) {
+      const botMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: generateBotResponse(outgoing),
+        sender: 'bot',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, botMessage]);
+      toast({
+        title: "Using demo responses",
+        description: "Backend not reachable; falling back to mock answers.",
+      });
+    }
   };
 
   const handleVoiceToggle = () => {
@@ -78,7 +100,7 @@ const PatientDashboard = () => {
       title: isListening ? "Voice recording stopped" : "Voice recording started",
       description: isListening ? "Processing your message..." : "Speak now to ask your question",
     });
-    
+
     if (!isListening) {
       // Simulate voice input after 3 seconds
       setTimeout(() => {
@@ -119,7 +141,7 @@ const PatientDashboard = () => {
                   Ask me anything about doctors, appointments, medical services, or hospital information
                 </p>
               </div>
-              <Button 
+              <Button
                 onClick={() => navigate('/voice')}
                 className="bg-gradient-to-r from-accent to-accent-hover hover:from-accent-hover hover:to-accent"
               >
@@ -139,19 +161,17 @@ const PatientDashboard = () => {
                     key={message.id}
                     className={`flex gap-3 ${message.sender === 'user' ? 'flex-row-reverse' : ''}`}
                   >
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                      message.sender === 'user' 
-                        ? 'bg-primary text-white' 
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${message.sender === 'user'
+                        ? 'bg-primary text-white'
                         : 'bg-accent text-white'
-                    }`}>
+                      }`}>
                       {message.sender === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                     </div>
                     <div className={`max-w-[80%] ${message.sender === 'user' ? 'text-right' : ''}`}>
-                      <div className={`inline-block p-3 rounded-2xl ${
-                        message.sender === 'user'
+                      <div className={`inline-block p-3 rounded-2xl ${message.sender === 'user'
                           ? 'bg-primary text-white'
                           : 'bg-muted text-foreground'
-                      }`}>
+                        }`}>
                         <p className="text-sm">{message.text}</p>
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">
@@ -189,18 +209,18 @@ const PatientDashboard = () => {
 
           {/* Quick Actions */}
           <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="p-4 cursor-pointer hover:shadow-lg transition-shadow" 
-                  onClick={() => setInputMessage("Show me available cardiologists")}>
+            <Card className="p-4 cursor-pointer hover:shadow-lg transition-shadow"
+              onClick={() => setInputMessage("Show me available cardiologists")}>
               <h3 className="font-semibold text-medical-dark mb-2">Find Specialists</h3>
               <p className="text-sm text-muted-foreground">Search for doctors by specialty</p>
             </Card>
             <Card className="p-4 cursor-pointer hover:shadow-lg transition-shadow"
-                  onClick={() => setInputMessage("What are the visiting hours?")}>
+              onClick={() => setInputMessage("What are the visiting hours?")}>
               <h3 className="font-semibold text-medical-dark mb-2">Hospital Info</h3>
               <p className="text-sm text-muted-foreground">Get hospital policies and hours</p>
             </Card>
             <Card className="p-4 cursor-pointer hover:shadow-lg transition-shadow"
-                  onClick={() => setInputMessage("How do I schedule an appointment?")}>
+              onClick={() => setInputMessage("How do I schedule an appointment?")}>
               <h3 className="font-semibold text-medical-dark mb-2">Appointments</h3>
               <p className="text-sm text-muted-foreground">Learn about scheduling</p>
             </Card>

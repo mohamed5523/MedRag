@@ -1,14 +1,15 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from fastapi.responses import JSONResponse
-from pathlib import Path
+import logging
 import time
 import uuid
-import logging
+from pathlib import Path
 from typing import List
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 
 from ..core.document_processor import DocumentProcessor
 from ..core.vector_store import VectorStore
-from ..models.schemas import DocumentUploadResponse, DocumentInfo
+from ..models.schemas import DocumentInfo, DocumentUploadResponse
 
 logger = logging.getLogger(__name__)
 
