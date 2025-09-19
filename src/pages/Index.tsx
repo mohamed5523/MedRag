@@ -33,15 +33,15 @@ const Index = () => {
         <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
           {/* Patient Access */}
           <Card className="p-8 bg-gradient-to-br from-white to-medical-light border-0 shadow-[var(--shadow-card)] hover:shadow-[var(--shadow-hover)] transition-all duration-300 cursor-pointer group"
-                onClick={() => navigate('/patient')}>
+                onClick={() => navigate('/auth')}>
             <div className="flex flex-col items-center text-center space-y-6">
               <div className="w-20 h-20 bg-gradient-to-br from-primary to-primary-hover rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
                 <Users className="w-10 h-10 text-white" />
               </div>
               <div>
-                <h3 className="text-2xl font-bold text-medical-dark mb-2">Patient Access</h3>
+                <h3 className="text-2xl font-bold text-medical-dark mb-2">Patient & Staff Access</h3>
                 <p className="text-muted-foreground mb-6">
-                  Chat with our AI assistant to get information about doctors, appointments, and medical services
+                  Sign in to chat with our AI assistant, get information about doctors, appointments, and medical services
                 </p>
               </div>
               <div className="space-y-3 w-full">
@@ -55,14 +55,14 @@ const Index = () => {
                 </div>
               </div>
               <Button size="lg" className="w-full bg-gradient-to-r from-primary to-primary-hover hover:from-primary-hover hover:to-primary">
-                Enter as Patient
+                Sign In as Patient/Staff
               </Button>
             </div>
           </Card>
 
           {/* Manager Access */}
           <Card className="p-8 bg-gradient-to-br from-white to-accent/5 border-0 shadow-[var(--shadow-card)] hover:shadow-[var(--shadow-hover)] transition-all duration-300 cursor-pointer group"
-                onClick={() => navigate('/admin')}>
+                onClick={() => navigate('/auth')}>
             <div className="flex flex-col items-center text-center space-y-6">
               <div className="w-20 h-20 bg-gradient-to-br from-accent to-accent-hover rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
                 <Shield className="w-10 h-10 text-white" />
@@ -70,7 +70,7 @@ const Index = () => {
               <div>
                 <h3 className="text-2xl font-bold text-medical-dark mb-2">Hospital Manager</h3>
                 <p className="text-muted-foreground mb-6">
-                  Access analytics, manage documents, and oversee system usage with comprehensive admin tools
+                  Sign in to access analytics, manage documents, and oversee system usage with comprehensive admin tools
                 </p>
               </div>
               <div className="space-y-3 w-full">
@@ -84,7 +84,7 @@ const Index = () => {
                 </div>
               </div>
               <Button size="lg" variant="secondary" className="w-full bg-gradient-to-r from-accent to-accent-hover text-white hover:from-accent-hover hover:to-accent">
-                Enter as Manager
+                Sign In as Manager
               </Button>
             </div>
           </Card>
