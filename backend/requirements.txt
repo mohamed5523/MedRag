@@ -25,6 +25,9 @@ tiktoken==0.5.2
 python-dotenv==1.0.0
 pydantic==2.5.0
 
+# Supabase client
+supabase>=2.4.0
+
 # Development
 pytest==7.4.3
 httpx==0.25.2

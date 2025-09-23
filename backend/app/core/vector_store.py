@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,8 +15,10 @@ class VectorStore:
     Manages document indexing and retrieval using ChromaDB and HuggingFace embeddings.
     """
     
-    def __init__(self, persist_dir: str = "data/chroma_db", embed_model: str = "intfloat/multilingual-e5-base"):
-        self.persist_dir = str(Path(persist_dir).absolute())
+    def __init__(self, persist_dir: str = None, embed_model: str = "intfloat/multilingual-e5-base"):
+        # Allow override via env var; default to ./data/chroma_db
+        persist_root = os.getenv("CHROMA_DB_PATH") or persist_dir or "data/chroma_db"
+        self.persist_dir = str(Path(persist_root).absolute())
         self.embed_model = embed_model
         self.embeddings = HuggingFaceEmbeddings(model_name=embed_model)
         self.collection_name = "medrag_collection"

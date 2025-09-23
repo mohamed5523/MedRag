@@ -4,7 +4,8 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from connect2supabase import supabase
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..core.document_processor import DocumentProcessor
@@ -110,6 +111,109 @@ async def list_documents():
     except Exception as e:
         logger.error(f"Error listing documents: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
+
+@router.post("/process-supabase")
+async def process_supabase_document(payload: dict = Body(...)):
+    """
+    Download a document from Supabase Storage and index it into the vector DB.
+    Expects: { id?: UUID, storage_path: str, filename?: str }
+    """
+    try:
+        storage_path = payload.get("storage_path")
+        if not storage_path:
+            raise HTTPException(status_code=400, detail="storage_path is required")
+
+        original_filename = payload.get("filename") or Path(storage_path).name
+        doc_id = payload.get("id")
+
+        # Download file bytes from Supabase Storage bucket 'documents'
+        storage = supabase.storage.from_("documents")
+        file_bytes = storage.download(storage_path)
+        if not file_bytes:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+
+        # Persist to local uploads for processing
+        # Use a deterministic name to avoid collisions while keeping trace to storage_path
+        local_name = f"supabase_{Path(storage_path).name}"
+        file_path = UPLOAD_DIR / local_name
+        with open(file_path, "wb") as f:
+            # Some SDKs return a Response-like object; handle bytes or .content
+            content = getattr(file_bytes, "content", file_bytes)
+            f.write(content)
+
+        # Extract text and index
+        raw_text = document_processor.load_document(file_path)
+        if not raw_text.strip():
+            raise HTTPException(status_code=400, detail="Downloaded document is empty or unreadable")
+
+        # Use storage_path as stable source key so we can delete by source later
+        chunks_created = vector_store.build_index(raw_text, storage_path)
+
+        # Mark as processed in Supabase if id or storage_path provided
+        update_query = supabase.from_("documents").update({"processed": True})
+        if doc_id:
+            update_query = update_query.eq("id", doc_id)
+        else:
+            update_query = update_query.eq("storage_path", storage_path)
+        update_query.execute()
+
+        return {
+            "status": "processed",
+            "chunks_created": chunks_created,
+            "storage_path": storage_path,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing Supabase document {payload}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
+
+@router.post("/delete-supabase")
+async def delete_supabase_document(payload: dict = Body(...)):
+    """
+    Delete a Supabase-stored document: remove vectors (by storage_path), storage object, and DB row.
+    Expects: { id?: UUID, storage_path?: str }
+    """
+    try:
+        storage_path = payload.get("storage_path")
+        doc_id = payload.get("id")
+        if not storage_path and not doc_id:
+            raise HTTPException(status_code=400, detail="id or storage_path is required")
+
+        # Look up storage_path if only id provided
+        if not storage_path and doc_id:
+            resp = supabase.from_("documents").select("storage_path").eq("id", doc_id).single().execute()
+            data = getattr(resp, 'data', None) or resp
+            storage_path = (data or {}).get('storage_path')
+        if not storage_path:
+            raise HTTPException(status_code=404, detail="storage_path not found")
+
+        # 1) Delete vectors from Chroma by source = storage_path
+        try:
+            vector_store.delete_documents_by_source(storage_path)
+        except Exception as e:
+            logger.warning(f"Vector deletion warning for {storage_path}: {e}")
+
+        # 2) Delete file from Supabase Storage
+        try:
+            supabase.storage.from_("documents").remove([storage_path])
+        except Exception as e:
+            logger.warning(f"Storage deletion warning for {storage_path}: {e}")
+
+        # 3) Delete DB row
+        q = supabase.from_("documents").delete()
+        if doc_id:
+            q = q.eq("id", doc_id)
+        else:
+            q = q.eq("storage_path", storage_path)
+        q.execute()
+
+        return {"status": "deleted", "storage_path": storage_path}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting Supabase document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 @router.delete("/{filename}")
 async def delete_document(filename: str):

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, Upload, FileText, Download, Trash2, Eye, LogOut, BarChart3 } from "lucide-react";
+import { ArrowLeft, Upload, FileText, Download, Trash2, Eye, LogOut, BarChart3, RotateCw } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -20,6 +20,7 @@ interface Document {
   processed: boolean;
   created_at: string;
   uploaded_by: string;
+  storage_path?: string;
 }
 
 const ManagerDashboard = () => {
@@ -30,12 +31,41 @@ const ManagerDashboard = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
+  const fetchDocuments = async () => {
+    const { data, error } = await supabase
+      .from('documents')
+      .select('id, filename, file_type, file_size, processed, created_at, uploaded_by, storage_path')
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.error('Fetch documents error:', error);
+      toast({ title: "Failed to load documents", description: error.message, variant: "destructive" });
+      return;
+    }
+    setDocuments(data as unknown as Document[]);
+  };
+
+  useEffect(() => {
+    fetchDocuments();
+    // Subscribe to Supabase realtime changes on documents table
+    const channel = supabase
+      .channel('documents-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'documents' }, () => {
+        fetchDocuments();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
     const file = files[0];
-    
+
     // Validate file type
     const allowedTypes = [
       'application/pdf',
@@ -91,7 +121,7 @@ const ManagerDashboard = () => {
       if (uploadError) throw uploadError;
 
       // Save document metadata to database
-      const { error: dbError } = await supabase
+      const { data: inserted, error: dbError } = await supabase
         .from('documents')
         .insert({
           filename: file.name,
@@ -100,9 +130,22 @@ const ManagerDashboard = () => {
           storage_path: filePath,
           uploaded_by: profile?.id,
           processed: false
-        });
+        })
+        .select()
+        .single();
 
       if (dbError) throw dbError;
+
+      // Trigger backend processing to update vector DB
+      try {
+        await fetch('/api/documents/process-supabase', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: inserted?.id, storage_path: filePath, filename: file.name })
+        });
+      } catch (e) {
+        console.error('Processing trigger failed:', e);
+      }
 
       toast({
         title: "File uploaded successfully",
@@ -112,13 +155,13 @@ const ManagerDashboard = () => {
       // Reset upload state
       setUploading(false);
       setUploadProgress(0);
-      
+
       // Clear input
       if (event.target) {
         event.target.value = '';
       }
 
-      // TODO: Trigger document processing via Edge Function
+      await fetchDocuments();
 
     } catch (error: any) {
       console.error('Upload error:', error);
@@ -247,7 +290,7 @@ const ManagerDashboard = () => {
                       />
                     </div>
                   </div>
-                  
+
                   {uploading && (
                     <div className="space-y-2">
                       <div className="flex justify-between text-sm">
@@ -313,7 +356,45 @@ const ManagerDashboard = () => {
                                 <Button variant="ghost" size="sm">
                                   <Download className="w-4 h-4" />
                                 </Button>
-                                <Button variant="ghost" size="sm">
+                                {!doc.processed && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    title="Reprocess"
+                                    onClick={async () => {
+                                      try {
+                                        await fetch('/api/documents/process-supabase', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ id: doc.id, storage_path: doc.storage_path, filename: doc.filename })
+                                        });
+                                      } catch (e) {
+                                        console.error('Manual reprocess failed:', e);
+                                      }
+                                    }}
+                                  >
+                                    <RotateCw className="w-4 h-4" />
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  title="Delete"
+                                  onClick={async () => {
+                                    try {
+                                      await fetch('/api/documents/delete-supabase', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ id: doc.id, storage_path: doc.storage_path })
+                                      });
+                                      await fetchDocuments();
+                                      toast({ title: 'Document deleted', description: `${doc.filename} was removed.` });
+                                    } catch (e: any) {
+                                      console.error('Delete failed:', e);
+                                      toast({ title: 'Delete failed', description: e?.message || 'Unable to delete document', variant: 'destructive' });
+                                    }
+                                  }}
+                                >
                                   <Trash2 className="w-4 h-4" />
                                 </Button>
                               </div>

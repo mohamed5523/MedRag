@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import AuthPage from "./pages/AuthPage";
 import PatientDashboard from "./pages/PatientDashboard";
@@ -23,40 +23,40 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Index />} />
+            <Route path="/" element={<Navigate to="/auth" replace />} />
             <Route path="/auth" element={<AuthGuard requireAuth={false}><AuthPage /></AuthGuard>} />
-            <Route 
-              path="/patient" 
+            <Route
+              path="/patient"
               element={
                 <AuthGuard allowedRoles={['patient', 'staff']}>
                   <PatientDashboard />
                 </AuthGuard>
-              } 
+              }
             />
-            <Route 
-              path="/admin" 
+            <Route
+              path="/admin"
               element={
                 <AuthGuard allowedRoles={['manager']}>
                   <ManagerDashboard />
                 </AuthGuard>
-              } 
+              }
             />
-            <Route 
-              path="/voice" 
+            <Route
+              path="/voice"
               element={
                 <AuthGuard allowedRoles={['patient', 'staff']}>
                   <VoiceInterface />
                 </AuthGuard>
-              } 
+              }
             />
             {/* Legacy admin route redirect */}
-            <Route 
-              path="/admin-old" 
+            <Route
+              path="/admin-old"
               element={
                 <AuthGuard allowedRoles={['manager']}>
                   <AdminDashboard />
                 </AuthGuard>
-              } 
+              }
             />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
