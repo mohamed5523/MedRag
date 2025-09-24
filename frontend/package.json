@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -n front,api -c \"cyan,magenta\" \"npm:dev:frontend\" \"npm:dev:backend\"",
     "dev:frontend": "vite",
-    "dev:backend": "bash -lc 'cd backend && uv run -p 3.11 python run.py'",
+    "dev:backend": "bash -lc 'cd ../backend && uv run -p 3.11 python run.py'",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
