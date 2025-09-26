@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,13 +22,15 @@ const PatientDashboard = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      text: "Hello! I'm your AI assistant. I can help you find information about doctors, appointments, and medical services. What would you like to know?",
+      text: "مع حضرتك المساعد الشخصي لمستشفى مارمرقس انا لست انسانا ولكن انا هنا لمساعدتك اتفضل اسأل وان لم استطع مساعدتك لا تقلق سوف يتم تحويلك الى خدمه العملاء",
       sender: 'bot',
       timestamp: new Date()
     }
   ]);
   const [inputMessage, setInputMessage] = useState("");
   const [isListening, setIsListening] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Mock responses for fallback when backend is unavailable
   const generateBotResponse = (userMessage: string): string => {
@@ -96,19 +98,70 @@ const PatientDashboard = () => {
     }
   };
 
-  const handleVoiceToggle = () => {
-    setIsListening(!isListening);
-    toast({
-      title: isListening ? "Voice recording stopped" : "Voice recording started",
-      description: isListening ? "Processing your message..." : "Speak now to ask your question",
-    });
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
 
-    if (!isListening) {
-      // Simulate voice input after 3 seconds
-      setTimeout(() => {
-        setIsListening(false);
-        setInputMessage("What doctors are available for cardiology appointments?");
-      }, 3000);
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        audioChunksRef.current = [];
+
+        try {
+          const formData = new FormData();
+          formData.append('audio_file', audioBlob, 'recording.webm');
+
+          const resp = await fetch('/api/asr/transcribe', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!resp.ok) throw new Error(`ASR HTTP ${resp.status}`);
+          const data = await resp.json();
+          const text: string = data.transcribed_text ?? '';
+
+          if (text) {
+            setInputMessage(text);
+            toast({ title: 'Transcribed', description: text });
+          } else {
+            toast({ title: 'No speech detected', description: 'Try speaking again' });
+          }
+        } catch (e: any) {
+          toast({ title: 'Transcription failed', description: e?.message || 'Unknown error' });
+        }
+      };
+
+      mediaRecorder.start();
+      setIsListening(true);
+      toast({ title: 'Voice recording started', description: 'Speak now' });
+    } catch (e: any) {
+      toast({ title: 'Microphone error', description: e?.message || 'Permission denied?' });
+    }
+  };
+
+  const stopRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+      recorder.stream.getTracks().forEach(t => t.stop());
+    }
+    setIsListening(false);
+    toast({ title: 'Voice recording stopped', description: 'Processing your message...' });
+  };
+
+  const handleVoiceToggle = () => {
+    if (isListening) {
+      stopRecording();
+    } else {
+      startRecording();
     }
   };
 

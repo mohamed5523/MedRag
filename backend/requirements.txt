@@ -19,6 +19,7 @@ markdown==3.5.2
 
 # LLM provider
 openai>=1.30.0
+groq>=0.11.0
 
 # Utilities
 tiktoken==0.5.2
