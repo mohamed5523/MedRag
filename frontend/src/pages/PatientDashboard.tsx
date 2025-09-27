@@ -32,6 +32,29 @@ const PatientDashboard = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
+  // Cross-browser microphone access with fallbacks and helpful errors
+  const requestMicStream = async (): Promise<MediaStream> => {
+    // Secure contexts requirement: https or localhost
+    const isLocalhost = typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+    if (typeof window !== 'undefined' && !window.isSecureContext && !isLocalhost) {
+      throw new Error('Microphone requires a secure context (HTTPS) or localhost');
+    }
+
+    const anyNav = navigator as any;
+    if (navigator && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function') {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+
+    const legacyGetUserMedia = anyNav.getUserMedia || anyNav.webkitGetUserMedia || anyNav.mozGetUserMedia || anyNav.msGetUserMedia;
+    if (typeof legacyGetUserMedia === 'function') {
+      return new Promise<MediaStream>((resolve, reject) => {
+        legacyGetUserMedia.call(navigator, { audio: true }, resolve, (err: any) => reject(err));
+      });
+    }
+
+    throw new Error('getUserMedia is not supported in this browser');
+  };
+
   // Mock responses for fallback when backend is unavailable
   const generateBotResponse = (userMessage: string): string => {
     const message = userMessage.toLowerCase();
@@ -100,7 +123,13 @@ const PatientDashboard = () => {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await requestMicStream();
+
+      if (typeof (window as any).MediaRecorder === 'undefined') {
+        throw new Error('MediaRecorder is not supported in this browser');
+      }
+
+      // Prefer webm/opus; some browsers ignore mimeType and choose best available
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -143,7 +172,7 @@ const PatientDashboard = () => {
       setIsListening(true);
       toast({ title: 'Voice recording started', description: 'Speak now' });
     } catch (e: any) {
-      toast({ title: 'Microphone error', description: e?.message || 'Permission denied?' });
+      toast({ title: 'Microphone error', description: e?.message || 'Permission denied or unsupported browser' });
     }
   };
 

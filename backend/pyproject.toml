@@ -9,7 +9,6 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     # --- Frontend ---
-    "streamlit",
     "requests",
     # --- RAG pipeline ---
     "langchain",
@@ -30,4 +29,7 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "python-multipart>=0.0.20",
     "supabase>=2.19.0",
+    "groq>=0.11.0",
+    "httptools>=0.6.4",
+    "uvloop>=0.21.0",
 ]
