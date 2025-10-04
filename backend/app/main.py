@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .api import analytics, asr, chat, documents
+from .api import analytics, asr, chat, documents, tts
 
 # Create FastAPI app
 app = FastAPI(
@@ -42,6 +42,7 @@ app.include_router(documents.router, prefix="/api/documents", tags=["documents"]
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(asr.router, prefix="/api/asr", tags=["asr"])
+app.include_router(tts.router, prefix="/api/tts", tags=["tts"])
 
 @app.get("/")
 async def root():
@@ -51,7 +52,9 @@ async def root():
         "endpoints": {
             "documents": "/api/documents",
             "chat": "/api/chat",
-            "analytics": "/api/analytics"
+            "analytics": "/api/analytics",
+            "asr": "/api/asr",
+            "tts": "/api/tts"
         }
     }
 

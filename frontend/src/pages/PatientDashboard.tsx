@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ArrowLeft, MessageCircle, Mic, Send, User, Bot, Phone, LogOut } from "lucide-react";
+import { ArrowLeft, MessageCircle, Mic, Send, User, Bot, Phone, LogOut, Volume2, VolumeX } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -13,6 +13,8 @@ interface Message {
   text: string;
   sender: 'user' | 'bot';
   timestamp: Date;
+  audioData?: string;  // base64 encoded audio
+  hasAudio?: boolean;
 }
 
 const PatientDashboard = () => {
@@ -29,8 +31,10 @@ const PatientDashboard = () => {
   ]);
   const [inputMessage, setInputMessage] = useState("");
   const [isListening, setIsListening] = useState(false);
+  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Cross-browser microphone access with fallbacks and helpful errors
   const requestMicStream = async (): Promise<MediaStream> => {
@@ -89,7 +93,8 @@ const PatientDashboard = () => {
     setInputMessage("");
 
     try {
-      const resp = await fetch("/api/chat/query", {
+      // Use the new endpoint with voice support
+      const resp = await fetch("/api/chat/query-with-voice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: outgoing, max_results: 5 })
@@ -103,9 +108,16 @@ const PatientDashboard = () => {
         id: (Date.now() + 1).toString(),
         text: data.answer ?? generateBotResponse(outgoing),
         sender: 'bot',
-        timestamp: new Date()
+        timestamp: new Date(),
+        audioData: data.audio_data,
+        hasAudio: data.has_audio
       };
       setMessages(prev => [...prev, botMessage]);
+
+      // Auto-play audio if available
+      if (data.has_audio && data.audio_data) {
+        setTimeout(() => playAudio(botMessage.id, data.audio_data), 500);
+      }
     } catch (err) {
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -194,6 +206,78 @@ const PatientDashboard = () => {
     }
   };
 
+  // Audio playback functions
+  const playAudio = (messageId: string, audioData: string) => {
+    try {
+      // Stop any currently playing audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      // Convert base64 to blob
+      const binaryString = atob(audioData);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Create and play audio
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+      setPlayingAudioId(messageId);
+
+      audio.onended = () => {
+        setPlayingAudioId(null);
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+      };
+
+      audio.onerror = () => {
+        setPlayingAudioId(null);
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        toast({
+          title: "Audio playback failed",
+          description: "Unable to play audio response",
+        });
+      };
+
+      audio.play().catch(err => {
+        console.error('Audio playback error:', err);
+        setPlayingAudioId(null);
+        toast({
+          title: "Audio playback failed",
+          description: err.message || "Unable to play audio",
+        });
+      });
+    } catch (error: any) {
+      console.error('Error preparing audio:', error);
+      toast({
+        title: "Audio error",
+        description: error.message || "Failed to prepare audio",
+      });
+    }
+  };
+
+  const stopAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+      setPlayingAudioId(null);
+    }
+  };
+
+  const toggleAudio = (messageId: string, audioData: string) => {
+    if (playingAudioId === messageId) {
+      stopAudio();
+    } else {
+      playAudio(messageId, audioData);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-medical-light to-background">
       {/* Header */}
@@ -264,9 +348,25 @@ const PatientDashboard = () => {
                         }`}>
                         <p className="text-sm">{message.text}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-xs text-muted-foreground">
+                          {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                        {message.hasAudio && message.audioData && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleAudio(message.id, message.audioData!)}
+                            className="h-6 w-6 p-0"
+                          >
+                            {playingAudioId === message.id ? (
+                              <VolumeX className="w-3 h-3 text-accent" />
+                            ) : (
+                              <Volume2 className="w-3 h-3 text-accent" />
+                            )}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

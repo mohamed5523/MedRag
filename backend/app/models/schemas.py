@@ -1,6 +1,8 @@
-from pydantic import BaseModel
-from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional
+
+from pydantic import BaseModel
+
 
 class ChatRequest(BaseModel):
     query: str
@@ -47,3 +49,48 @@ class HealthResponse(BaseModel):
     vector_store_status: dict
     qa_engine_status: dict
     timestamp: datetime
+
+# ----------------- TTS Schemas -----------------
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: Optional[str] = None
+
+
+class TTSResponse(BaseModel):
+    success: bool
+    audio_data: Optional[str] = None  # base64 encoded audio
+    audio_size: int
+    voice_used: str
+    text_length: int
+    error: Optional[str] = None
+
+
+class TTSHealthResponse(BaseModel):
+    status: str
+    provider: str
+    available_voices: Optional[int] = None
+    error: Optional[str] = None
+
+
+class VoiceInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+
+
+class VoiceListResponse(BaseModel):
+    voices: List[VoiceInfo]
+    count: int
+
+
+class ChatResponseWithAudio(BaseModel):
+    answer: str
+    sources: List[str]
+    context_count: int
+    model_used: str
+    tokens_used: Optional[int] = None
+    audio_data: Optional[str] = None
+    audio_size: Optional[int] = None
+    has_audio: bool = False
+    error: Optional[str] = None

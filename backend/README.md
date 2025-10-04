@@ -41,24 +41,30 @@ The server will start at `http://localhost:8000`
 
 ### 4. Verify Installation
 
-- API Documentation: http://localhost:8000/docs
-- Health Check: http://localhost:8000/health
-- Test the API: http://localhost:8000/api/chat/health
+- API Documentation: <http://localhost:8000/docs>
+- Health Check: <http://localhost:8000/health>
+- Test the API: <http://localhost:8000/api/chat/health>
+  - TTS Health: <http://localhost:8000/api/tts/health>
+  - TTS Voices: <http://localhost:8000/api/tts/voices>
+  - TTS Audio (example): <http://localhost:8000/api/tts/audio?text=Hello>
 
 ## 📋 API Endpoints
 
 ### Documents
+
 - `POST /api/documents/upload` - Upload and process documents
 - `GET /api/documents/list` - List all uploaded documents
 - `GET /api/documents/stats` - Get document statistics
 - `DELETE /api/documents/{filename}` - Delete a document
 
 ### Chat
+
 - `POST /api/chat/query` - Query the RAG system
 - `GET /api/chat/health` - Check chat system health
 - `POST /api/chat/test` - Test the chat functionality
 
 ### Analytics
+
 - `GET /api/analytics/overview` - Get analytics overview
 - `GET /api/analytics/queries` - Get query logs
 - `GET /api/analytics/health` - Get system health
@@ -71,6 +77,9 @@ The server will start at `http://localhost:8000`
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENAI_API_KEY` | OpenAI API key for LLM | Required |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key for TTS | Required for TTS |
+| `ELEVENLABS_VOICE_ID` | Default ElevenLabs voice ID | Required for TTS |
+| `ELEVENLABS_MODEL` | ElevenLabs model | `eleven_flash_v2_5` |
 | `CHROMA_DB_PATH` | ChromaDB storage path | `./data/chroma_db` |
 | `UPLOAD_DIR` | Document upload directory | `./uploads` |
 | `API_HOST` | Server host | `0.0.0.0` |
