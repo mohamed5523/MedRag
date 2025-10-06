@@ -97,6 +97,18 @@ class TextToSpeech:
             # Return voices that work well with Arabic
             return [
                 {
+                    "id": "Xb7hH8MSUJpSbSDYk0k2",
+                    "name": "Alice",
+                    "description": "Female Formal voice",
+                    "language": "Multi-language",
+                },
+                {
+                    "id": "qi4PkV9c01kb869Vh7Su",
+                    "name": "Asmaa",
+                    "description": "Female Arabic voice",
+                    "language": "Arabic",
+                },
+                {
                     "id": tts_settings.ELEVENLABS_VOICE_ID,
                     "name": "Kemitt",
                     "description": "Female Arabic voice",

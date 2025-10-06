@@ -21,10 +21,18 @@ const PatientDashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { signOut } = useAuth();
+  // Build initial greeting based on Eastern European Summer Time (GMT+3)
+  const initialGreetingText = (() => {
+    const now = new Date();
+    const hourEEST = (now.getUTCHours() + 3) % 24; // EEST = UTC+3
+    const greeting = hourEEST < 12 ? 'صَبَاح الخِير' : 'مَسَاء الخِير';
+    return `${greeting} يا أفندم، مع حضرتك المساعد الشخصي، اسمي كيميت من مستشفى مارمَرقُس. إزاي أقدر أساعدك النهاردة؟`;
+    // return `${greeting} يا أَفَندِم، مَع حَضْرِتِك المُساعِد الشَّخصِي، وَاِسمِي كيمِت، مِن مُستَشفَى مار مَرقُس. مُمكِن أَساعِد حَضْرِتِك إِزَّاي؟`;
+  })();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      text: "مع حضرتك المساعد الشخصي لمستشفى مارمرقس انا لست انسانا ولكن انا هنا لمساعدتك اتفضل اسأل وان لم استطع مساعدتك لا تقلق سوف يتم تحويلك الى خدمه العملاء",
+      text: initialGreetingText,
       sender: 'bot',
       timestamp: new Date()
     }
@@ -32,9 +40,11 @@ const PatientDashboard = () => {
   const [inputMessage, setInputMessage] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const [canAutoplay, setCanAutoplay] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const initialGreetingPlayedRef = useRef(false);
 
   // Cross-browser microphone access with fallbacks and helpful errors
   const requestMicStream = async (): Promise<MediaStream> => {
@@ -277,6 +287,56 @@ const PatientDashboard = () => {
       playAudio(messageId, audioData);
     }
   };
+
+  // Detect first user interaction to enable autoplay (browser autoplay policy)
+  useEffect(() => {
+    const enable = () => setCanAutoplay(true);
+    window.addEventListener('pointerdown', enable, { once: true } as AddEventListenerOptions);
+    window.addEventListener('keydown', enable, { once: true } as AddEventListenerOptions);
+    return () => {
+      window.removeEventListener('pointerdown', enable);
+      window.removeEventListener('keydown', enable);
+    };
+  }, []);
+
+  // Synthesize and auto-play the initial greeting on mount
+  useEffect(() => {
+    const synthesizeInitialGreeting = async () => {
+      try {
+        const resp = await fetch('/api/tts/synthesize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: initialGreetingText })
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data?.audio_data) {
+          setMessages(prev => prev.map(m => m.id === '1' ? { ...m, audioData: data.audio_data, hasAudio: true } : m));
+          if (canAutoplay && !initialGreetingPlayedRef.current) {
+            setTimeout(() => {
+              playAudio('1', data.audio_data);
+              initialGreetingPlayedRef.current = true;
+            }, 500);
+          }
+        }
+      } catch {
+        // Silently ignore; text-only fallback
+      }
+    };
+    synthesizeInitialGreeting();
+  }, [canAutoplay, initialGreetingText]);
+
+  // Auto-play the initial greeting once interaction occurs and audio is ready
+  useEffect(() => {
+    if (!canAutoplay || initialGreetingPlayedRef.current) return;
+    const first = messages.find(m => m.id === '1');
+    if (first?.hasAudio && first.audioData) {
+      setTimeout(() => {
+        playAudio('1', first.audioData!);
+        initialGreetingPlayedRef.current = true;
+      }, 500);
+    }
+  }, [canAutoplay, messages]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-medical-light to-background">
