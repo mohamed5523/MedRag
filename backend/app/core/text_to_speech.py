@@ -60,9 +60,10 @@ class TextToSpeech:
             # Use provided voice_id or fall back to configured voice
             selected_voice_id = voice_id or tts_settings.ELEVENLABS_VOICE_ID
 
-            logger.info(f"Synthesizing speech for text: {text[:50]}...")
+            logger.info(f"Synthesizing speech for text: {text[:50]}... with voice: {selected_voice_id}")
 
             # Generate audio using ElevenLabs API
+            # Note: LLM already handles Arabic dialect and tashkeel via prompt engineering
             audio_generator = self.client.text_to_speech.convert(
                 text=text,
                 voice_id=selected_voice_id,
@@ -91,31 +92,60 @@ class TextToSpeech:
             return False
 
     async def get_available_voices(self) -> list[dict]:
-        """Get list of available voices."""
+        """Get list of available voices with Arabic support."""
         try:
-            # Return a list of common ElevenLabs voices
+            # Return voices that work well with Arabic
             return [
                 {
-                    "id": tts_settings.ELEVENLABS_VOICE_ID,
-                    "name": "Configured Voice",
-                    "description": "Currently configured voice",
+                    "id": "IES4nrmZdUBHByLBde0P",
+                    "name": "Haytham",
+                    "description": "Male Arabic voice",
+                    "language": "Arabic",
                 },
-                {"id": "pNInz6obpgDQGcFmaJgB", "name": "Adam", "description": "Male voice"},
+                {
+                    "id": tts_settings.ELEVENLABS_VOICE_ID,
+                    "name": "Abdullah",
+                    "description": "Currently configured default voice",
+                    "language": "Arabic",
+                },
+                # Multilingual voices (good for Arabic)
+                {
+                    "id": "pNInz6obpgDQGcFmaJgB",
+                    "name": "Adam",
+                    "description": "Deep male voice - Good for Arabic",
+                    "language": "Multi-language",
+                },
                 {
                     "id": "EXAVITQu4vr4xnSDxMaL",
                     "name": "Bella",
-                    "description": "Female voice",
+                    "description": "Warm female voice - Good for Arabic",
+                    "language": "Multi-language",
                 },
                 {
-                    "id": "2EiwWnXFnvU5JabPnv8n",
-                    "name": "Clyde",
-                    "description": "Character voice",
+                    "id": "ThT5KcBeYPX3keUQqHPh",
+                    "name": "Dorothy",
+                    "description": "Pleasant female voice",
+                    "language": "Multi-language",
                 },
                 {
-                    "id": "CwhRBWXzGAHq8TQ4Fs17",
-                    "name": "Roger",
-                    "description": "Casual voice",
+                    "id": "TxGEqnHWrfWFTfGW9XjX",
+                    "name": "Josh",
+                    "description": "Young male voice",
+                    "language": "Multi-language",
                 },
+                {
+                    "id": "VR6AewLTigWG4xSOukaG",
+                    "name": "Arnold",
+                    "description": "Crisp male voice",
+                    "language": "Multi-language",
+                },
+                {
+                    "id": "21m00Tcm4TlvDq8ikWAM",
+                    "name": "Rachel",
+                    "description": "Calm female voice",
+                    "language": "Multi-language",
+                },
+                
             ]
         except Exception:
             return []

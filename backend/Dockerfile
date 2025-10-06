@@ -40,5 +40,4 @@ RUN mkdir -p /app/data/chroma_db /app/uploads
 EXPOSE 8000
 
 # Prefer running via uv to ensure the synced virtualenv is used
-# CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-CMD ["uv", "run", "uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

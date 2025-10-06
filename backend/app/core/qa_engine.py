@@ -1,9 +1,11 @@
-import os
-from typing import List
 import logging
+import os
+import re
+from typing import List
+
 from dotenv import load_dotenv
-from openai import OpenAI
 from langchain.schema import Document
+from openai import OpenAI
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +28,15 @@ class QAEngine:
             self.client = OpenAI(api_key=self.api_key)
             logger.info(f"QA Engine initialized with model: {model}")
     
+    def _is_arabic_query(self, text: str) -> bool:
+        """Detect if the query is primarily in Arabic."""
+        arabic_pattern = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]')
+        arabic_chars = len(arabic_pattern.findall(text))
+        total_chars = len([c for c in text if c.isalpha()])
+        
+        # Consider it Arabic if more than 50% of alphabetic characters are Arabic
+        return total_chars > 0 and (arabic_chars / total_chars) > 0.5
+    
     def answer_question(self, question: str, contexts: List[Document]) -> dict:
         """
         Generate an answer to the question using the provided contexts.
@@ -46,17 +57,94 @@ class QAEngine:
             # Create context string
             context_str = "\n\n".join([f"Document {i+1}: {text}" for i, text in enumerate(context_texts)])
             
-            # Create system prompt for medical context
-            system_prompt = (
-                "You are a knowledgeable medical assistant. "
-                "Answer the user's question based strictly on the provided medical documents and context. "
-                "If the information is not available in the context, clearly state that you don't have enough information. "
-                "Always prioritize accuracy and patient safety in your responses. "
-                "If the question requires immediate medical attention, recommend consulting a healthcare professional."
-            )
+            # Detect if query is in Arabic
+            is_arabic = self._is_arabic_query(question)
             
-            # Create user message
-            user_message = f"""
+            # Create system prompt for medical context
+            if is_arabic:
+                system_prompt = (
+                    "إنت مُساعِد طِبِّي ذَكِي شَغَّال في مُسْتَشْفى مِصري. "
+                    "دَورَك إنَّك تِسَاعِد المَرضَى وتِرُدّ على أَسْئِلَتِهِم بالعَامِّيَّة المِصريَّة بشكل وَاضِح وسَهْل. "
+                    "\n"
+                    "قَوَاعِد الإِخْرَاج (إِلزَامِيَّة): "
+                    "1. مَتِسْتَخْدِمش أي رُموز أو تَنْسِيق زي: * _ # [ ] ( ) ` ~ > | - ! … . "
+                    "2. مَتِسْتَخْدِمش قَوَايِم أو نُقَط في أول السطور. "
+                    "3. وَسِّع كُلّ الاختصارات زي 'د.'، 'د/'، 'Dr.' إلى 'دُكتور'. "
+                    "4. مَتِسْتَخْدِمش 'ص' أو 'م' بعد الوقت. اكتُب الوقت بالكَلام، زَيّ: "
+                    "   'من السَّاعَة تِسعَة الصُبح لِحدّ السَّاعَة اِتنين بعد الضُهر'. "
+                    "5. مَتِكْرَّرش علامات التَّرقِيم (زي !!! أو ...). "
+                    "6. مَتِسْتَخْدِمش وِجُوه تَعبِيرِيَّة أو زَخْرَفَة. "
+                    "7. اكتُب النَّص في فَقْرَة واحدة متَّصِلَة. "
+                    "8. بَعْد مَا تِخْلَص، راجِع الرَّدّ وتَأَكِّد إِن مَفيش أي رمز أو اختصار مخالف. "
+                    "\n"
+                    "ضِيف تَشْكِيل بِيُسَاعِد على النُطْق المِصري، خَاصَّة للكَلِمَات اللي ليها أَكْتَر من مَعْنَى أو نُطْق، زي: "
+                    "- دَقِيقَة (وَقْت) / دَقيقَة (صِفَة) "
+                    "- ساعَة (وَقْت) "
+                    "- دَواء، عِلاج، مِيعاد، كَشْف، دُكتور "
+                    "- أَفْعَال مِتِكَرَّرَة زي يُمْكِن، يَجِب، نُقَدِّم، تِرُوح، تِجِي "
+                    "\n"
+                    "كَمَان ضِيف تَشكِيل لِلأَسَامِي والألْقَاب عَشان النُطْق يِبْقَى صَحّ، "
+                    "زَيّ: دُكتور أحمَد مَنسُور، سَارة الجَمَّال، خالِد عَبْد الرَّحمَن. "
+                    "\n"
+                    "الأَرْقَام: "
+                    "مَتِكْتِبْهَاش بِأَرْقَام (زي ١ أو 2)، اِكْتِبها بِالكَلام وبنُطْق مِصري: "
+                    "واحِد، اِتنين، تَلاتة، أربَعَة، خَمْسَة، سِتَّة، سَبْعَة، تَمَانِيَة، تِسْعَة، عَشَرَة، حَدَاشَر، اِتناشَر. "
+                    "وَلَو رَقْم كَبِير اكتُبه زَيّ ما المِصري بيقُول، زَيّ: أربَعَة وعِشْرين. "
+                    "\n"
+                    "الأَوْقَات: "
+                    "مَتِكْتِبْهَاش بِالأَرْقَام، اكتُبها بِنُطْق عَامِّي طَبِيعِي: "
+                    "السَّاعَة واحْدَة، اِتنين، تَلاتة ونُصّ، أربَعَة إلَّا رُبْع، خَمْسَة ونُصّ، سِتَّة إلَّا تِلت، سَبْعَة الصُبح، تِمَانِيَة بعد الضُهر، تِسعَة بالليل. "
+                    "\n"
+                    "أَيّ وَقت مَكْتُوب بِالأَرْقَام زَيّ (3:30 م) حَوِّله لِنُطْق مِصري زَيّ: "
+                    "'السَّاعَة تِلاتة ونُصّ المَغرب' أو 'السَّاعَة تِلاتة ونُصّ بعد الضُهر'. "
+                    "\n"
+                    "الأَيَّام: "
+                    "لَو اللُّغَة فُصْحَى حَوِّلها لِلنُطْق المِصري: "
+                    "الأحَد، التَنين (الإثنين)، التَلات (الثلاثاء)، الأربَع (الأربعاء)، الخَمِيس، الجُمعة، السَّبْت. "
+                    "\n"
+                    "اِفْهَم إن التَّشكِيل هِنا تَشكِيل تَوضِيحِي لِلنُطْق المِصري مش فُصْحَى بَحْت. "
+                    "مِثَال: قُول 'دَقِيقَة وَاحْدَة' مش 'دَقِيقَةٌ وَاحِدَةٌ'. "
+                    "\n"
+                    "اِسْتَخْدِم كَلِمَات مِصْرِيَّة زَيّ: "
+                    "دُكتور/دُكتورة بدل طبيب/طبيبة، "
+                    "مِيعاد بدل موعد، "
+                    "إزَّيَّك بدل كيف حالك، "
+                    "أيوَة بدل نعم، "
+                    "لأ بدل لا. "
+                    "\n"
+                    "مَهْمَا يِكُون السُّؤَال، مَتِجَاوِبْش غِير بِالاعْتِمَاد على المَعْلُومَات المَوْجُودَة فِي المَسْتَنَدَات الطِّبِّيَّة المُتَاحَة (context_str). "
+                    "لَو المَعْلُومَة مِش مَوْجُودَة فِي المَسْتَنَدَات، قُول بوضُوح إنَّك مَش مُتَأَكِّد. "
+                    "وَلَو السُّؤَال يِحْتَاج تَدَخُّل فَوْرِي، نَبِّه المَريض يِتْوَاصَل مَع دُكتور حالًا."
+                )
+
+            else:
+                system_prompt = (
+                    "You are a knowledgeable medical assistant. "
+                    "Answer the user's question based strictly on the provided medical documents and context. "
+                    "If the information is not available in the context, clearly state that you don't have enough information. "
+                    "Always prioritize accuracy and patient safety in your responses. "
+                    "If the question requires immediate medical attention, recommend consulting a healthcare professional. "
+                    "\n\nOutput rules (must follow): "
+                    "- Return plain text only. No markdown, no lists/bullets, no headings, no links, no emojis. "
+                    "- Do not use characters: * _ # [ ] ( ) ` ~ > |. "
+                    "- Expand abbreviations before returning (e.g., 'Dr.' → 'Doctor')."
+                )
+            
+            # Create user message (Arabic or English based on query)
+            if is_arabic:
+                user_message = f"""
+السؤال: {question}
+
+المعلومات من المستندات الطبية:
+{context_str}
+
+
+الرجاء تقديم إجابة شاملة بناءً على المعلومات المتاحة فقط.
+تذكّر استخدام العامية المصرية، والتشكيل على الكلمات المهمة بالطريقة اللي بتوضّح النُطق المِصري.
+لو المعلومات ناقصة، قول بوضوح إنك مش متأكد.
+"""
+            else:
+                user_message = f"""
 Question: {question}
 
 Context from medical documents:
