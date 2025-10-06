@@ -97,13 +97,19 @@ class TextToSpeech:
             # Return voices that work well with Arabic
             return [
                 {
+                    "id": tts_settings.ELEVENLABS_VOICE_ID,
+                    "name": "Kemitt",
+                    "description": "Female Arabic voice",
+                    "language": "Arabic",
+                },
+                {
                     "id": "IES4nrmZdUBHByLBde0P",
                     "name": "Haytham",
                     "description": "Male Arabic voice",
                     "language": "Arabic",
                 },
                 {
-                    "id": tts_settings.ELEVENLABS_VOICE_ID,
+                    "id": "ocqVw6LVSdCxCra4XhMH",
                     "name": "Abdullah",
                     "description": "Currently configured default voice",
                     "language": "Arabic",
