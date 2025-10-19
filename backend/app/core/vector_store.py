@@ -3,7 +3,14 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from langchain.schema import Document
+try:
+    from langchain_core.documents import Document
+except Exception:
+    try:
+        from langchain.schema import Document
+    except Exception:
+        from langchain.docstore.document import Document
+        
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter

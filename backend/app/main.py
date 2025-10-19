@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .api import analytics, asr, chat, documents, tts
+from .api import analytics, asr, chat, documents, tts, whatsapp
 
 # Create FastAPI app
 app = FastAPI(
@@ -43,6 +43,7 @@ app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(asr.router, prefix="/api/asr", tags=["asr"])
 app.include_router(tts.router, prefix="/api/tts", tags=["tts"])
+app.include_router(whatsapp.router, tags=["whatsapp"])  # exposes /webhook/whatsapp
 
 @app.get("/")
 async def root():

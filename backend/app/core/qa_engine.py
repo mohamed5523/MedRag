@@ -4,7 +4,14 @@ import re
 from typing import List
 
 from dotenv import load_dotenv
-from langchain.schema import Document
+
+try:
+    from langchain_core.documents import Document
+except Exception:
+    try:
+        from langchain.schema import Document
+    except Exception:
+        from langchain.docstore.document import Document
 from openai import OpenAI
 
 # Load environment variables
