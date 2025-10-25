@@ -1,8 +1,14 @@
 import base64
 import logging
 import os
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any, Dict, Optional
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:
+    ZoneInfo = None  # type: ignore[assignment]
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -79,6 +85,19 @@ async def whatsapp_handler(request: Request) -> Response:
         if not from_number:
             return Response(content="Missing sender", status_code=400)
 
+        # Compute localized 'now' from WhatsApp message timestamp (Egypt timezone default)
+        tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
+        msg_ts_raw = message.get("timestamp")  # UNIX seconds as string
+        if msg_ts_raw:
+            try:
+                ts = int(msg_ts_raw)
+                now_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+                now_local = now_utc.astimezone(ZoneInfo(tz_name)) if ZoneInfo else now_utc
+            except Exception:
+                now_local = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
+        else:
+            now_local = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
+
         # Normalize user input
         user_text: Optional[str] = None
         msg_type = message.get("type")
@@ -122,7 +141,7 @@ async def whatsapp_handler(request: Request) -> Response:
                 "Please try rephrasing your question or ensure that relevant documents have been uploaded."
             )
         else:
-            result = qa_engine.answer_question(user_text, relevant_docs)
+            result = qa_engine.answer_question(user_text, relevant_docs, now_dt=now_local)
             answer = result.get("answer") or ""
 
         # DEMO: send both text and audio replies

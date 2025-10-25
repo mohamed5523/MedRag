@@ -1,7 +1,13 @@
 import logging
 import os
 import re
+from datetime import datetime
 from typing import List
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:
+    ZoneInfo = None  # type: ignore[assignment]
 
 from dotenv import load_dotenv
 
@@ -44,7 +50,7 @@ class QAEngine:
         # Consider it Arabic if more than 50% of alphabetic characters are Arabic
         return total_chars > 0 and (arabic_chars / total_chars) > 0.5
     
-    def answer_question(self, question: str, contexts: List[Document]) -> dict:
+    def answer_question(self, question: str, contexts: List[Document], now_dt: datetime | None = None) -> dict:
         """
         Generate an answer to the question using the provided contexts.
         Returns a dictionary with answer, sources, and metadata.
@@ -160,8 +166,40 @@ Context from medical documents:
 Please provide a comprehensive answer based on the available information.
 """
             
+            # Add time context based on Egypt timezone (Africa/Cairo) to ground relative dates
+            tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
+            if now_dt is None:
+                now_dt = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
+
+            weekday_ar = {
+                "Saturday": "السبت",
+                "Sunday": "الأحد",
+                "Monday": "الاتنين",
+                "Tuesday": "التلات",
+                "Wednesday": "الأربع",
+                "Thursday": "الخميس",
+                "Friday": "الجمعة",
+            }
+            months_ar = [
+                "يناير","فبراير","مارس","أبريل","مايو","يونيو",
+                "يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر",
+            ]
+
+            if is_arabic:
+                weekday_str = weekday_ar.get(now_dt.strftime("%A"), now_dt.strftime("%A"))
+                month_str = months_ar[now_dt.month - 1]
+                date_hint = f"النهاردة {weekday_str}، {now_dt.day} {month_str} {now_dt.year}."
+            else:
+                date_hint = f"Today is {now_dt.strftime('%A')}, {now_dt.strftime('%b %d, %Y')}."
+
+            time_context_message = (
+                f"{date_hint} Current timezone: {tz_name}. "
+                f"Interpret relative dates (e.g., 'tomorrow') relative to this time."
+            )
+
             messages = [
                 {"role": "system", "content": system_prompt},
+                {"role": "system", "content": time_context_message},
                 {"role": "user", "content": user_message}
             ]
             

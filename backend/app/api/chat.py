@@ -1,6 +1,13 @@
 import base64
 import logging
+import os
 import time
+from datetime import datetime, timezone
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:
+    ZoneInfo = None  # type: ignore[assignment]
 
 from fastapi import APIRouter, HTTPException
 
@@ -58,8 +65,12 @@ async def query_documents(request: ChatRequest):
                 tokens_used=0
             )
         
-        # Generate answer using QA engine
-        result = qa_engine.answer_question(request.query, relevant_docs)
+        # Compute Egypt-local 'now' and pass to QA engine to ground relative dates
+        tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
+        now_local = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
+
+        # Generate answer using QA engine with time context
+        result = qa_engine.answer_question(request.query, relevant_docs, now_dt=now_local)
         
         processing_time = time.time() - start_time
         logger.info(f"Processed query in {processing_time:.2f}s: {request.query[:50]}...")
@@ -127,8 +138,12 @@ async def query_with_voice_response(request: ChatRequest):
                 has_audio=has_audio,
             )
 
-        # Generate answer using QA engine
-        result = qa_engine.answer_question(request.query, relevant_docs)
+        # Compute Egypt-local 'now' and pass to QA engine to ground relative dates
+        tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
+        now_local = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
+
+        # Generate answer using QA engine with time context
+        result = qa_engine.answer_question(request.query, relevant_docs, now_dt=now_local)
 
         audio_data = None
         audio_size = None
