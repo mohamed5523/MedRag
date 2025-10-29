@@ -3,8 +3,8 @@ import logging
 import os
 from typing import Optional
 
-import requests  # kept for ElevenLabs generator fallback; not used for Azure SDK
 from elevenlabs import ElevenLabs
+from openai import AsyncOpenAI
 
 from .tts_exceptions import TextToSpeechError
 from .tts_settings import tts_settings
@@ -25,6 +25,12 @@ class TextToSpeech:
         self.provider: str = (tts_settings.TTS_PROVIDER or "openai").lower()
         self._validate_env_vars()
         self._client: Optional[ElevenLabs] = None  # for ElevenLabs only
+        self.openai_client: Optional[AsyncOpenAI] = (
+            AsyncOpenAI(api_key=tts_settings.OPENAI_API_KEY)
+            if self.provider == "openai"
+            else None
+        )
+
 
     def _validate_env_vars(self) -> None:
         """Validate required environment variables for the selected provider."""
@@ -150,7 +156,7 @@ class TextToSpeech:
         return await asyncio.to_thread(_do_speak)
 
     async def _openai_synthesize(self, text: str, voice_name: str) -> bytes:
-        """Call OpenAI TTS (gpt-4o-mini-tts) via REST API."""
+        """Call OpenAI TTS (gpt-4o-mini-tts) using the official Python SDK."""
         instructions = (
             "Speak in a warm, empathetic, and supportive tone with natural emotional range. "
             "Use gentle intonation that rises slightly at the end of questions to sound engaging and attentive. "
@@ -160,26 +166,20 @@ class TextToSpeech:
             "Always sound approachable, confident, and genuinely eager to help."
         )
 
-        def _do_call() -> bytes:
-            url = "https://api.openai.com/v1/audio/speech"
-            headers = {
-                "Authorization": f"Bearer {tts_settings.OPENAI_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": tts_settings.OPENAI_TTS_MODEL,
-                "voice": voice_name or tts_settings.OPENAI_TTS_VOICE,
-                "input": text,
-                "format": tts_settings.OPENAI_TTS_AUDIO_FORMAT,
-                "instructions": instructions,
-            }
-            resp = requests.post(url, headers=headers, json=payload, timeout=60)
-            if resp.status_code != 200:
-                raise TextToSpeechError(f"OpenAI TTS failed: {resp.status_code} {resp.text}")
-            return resp.content or b""
+        try:
+            response = await self.openai_client.audio.speech.create(
+                model=tts_settings.OPENAI_TTS_MODEL,  # e.g. "gpt-4o-mini-tts" or "tts-1"
+                voice=voice_name or tts_settings.OPENAI_TTS_VOICE,
+                input=text,
+                format=tts_settings.OPENAI_TTS_AUDIO_FORMAT,  # e.g. "mp3" or "wav"
+                instructions=instructions,
+            )
+            # The SDK returns a binary object with the audio data
+            audio_bytes = await response.read()
+            return audio_bytes
 
-        return await asyncio.to_thread(_do_call)
-
+        except Exception as e:
+            raise TextToSpeechError(f"OpenAI TTS failed: {str(e)}")
     def is_available(self) -> bool:
         """Check if TTS service is available for the selected provider."""
         try:
