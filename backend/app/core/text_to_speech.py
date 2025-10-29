@@ -151,6 +151,15 @@ class TextToSpeech:
 
     async def _openai_synthesize(self, text: str, voice_name: str) -> bytes:
         """Call OpenAI TTS (gpt-4o-mini-tts) via REST API."""
+        instructions = (
+            "Speak in a warm, empathetic, and supportive tone with natural emotional range. "
+            "Use gentle intonation that rises slightly at the end of questions to sound engaging and attentive. "
+            "Maintain a calm, friendly pace — not too fast, not too slow — to convey patience and professionalism. "
+            "When offering reassurance or delivering sensitive information, lower your volume slightly, almost like a soft whisper, "
+            "to create a sense of care and trust. "
+            "Always sound approachable, confident, and genuinely eager to help."
+        )
+
         def _do_call() -> bytes:
             url = "https://api.openai.com/v1/audio/speech"
             headers = {
@@ -162,6 +171,7 @@ class TextToSpeech:
                 "voice": voice_name or tts_settings.OPENAI_TTS_VOICE,
                 "input": text,
                 "format": tts_settings.OPENAI_TTS_AUDIO_FORMAT,
+                "instructions": instructions,
             }
             resp = requests.post(url, headers=headers, json=payload, timeout=60)
             if resp.status_code != 200:
