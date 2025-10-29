@@ -4,9 +4,10 @@
 
 Before testing the TTS feature, ensure you have:
 
-1. **ElevenLabs API Key** ✅
+1. **OpenAI API Key** ✅ (default provider)
 2. **Environment Variables Set** ✅
 3. **Backend Dependencies Installed** ✅
+4. (Optional) **ElevenLabs API Key** if you want to use ElevenLabs
 
 ## ⚙️ Setup Steps
 
@@ -15,13 +16,17 @@ Before testing the TTS feature, ensure you have:
 Create or update `/heal-query-hub/backend/.env`:
 
 ```env
-# OpenAI Configuration (existing)
+# OpenAI Configuration (default TTS provider)
 OPENAI_API_KEY=your_openai_key_here
+TTS_PROVIDER=openai
+OPENAI_TTS_MODEL=gpt-4o-mini-tts
+OPENAI_TTS_VOICE=nova
+OPENAI_TTS_AUDIO_FORMAT=mp3
 
-# ElevenLabs TTS Configuration (NEW)
-ELEVENLABS_API_KEY=sk_6eb1c0361e670fd75f1f45cf403d400dcf3632bbc8539951
-ELEVENLABS_VOICE_ID=IES4nrmZdUBHByLBde0P
-ELEVENLABS_MODEL=eleven_flash_v2_5
+# ElevenLabs TTS Configuration (optional)
+# ELEVENLABS_API_KEY=your_elevenlabs_key_here
+# ELEVENLABS_VOICE_ID=IES4nrmZdUBHByLBde0P
+# ELEVENLABS_MODEL=eleven_flash_v2_5
 ```
 
 ### 2. Install Backend Dependencies

@@ -30,18 +30,22 @@ except Exception as e:
 @router.post("/synthesize", response_model=TTSResponse)
 async def synthesize_speech(request: TTSRequest):
     """
-    Convert text to speech using ElevenLabs TTS.
+    Convert text to speech using the server-configured TTS provider.
 
     Returns metadata about the generated audio with base64 data included.
     """
     if not tts_service:
         raise HTTPException(
             status_code=503,
-            detail="TTS service unavailable: ElevenLabs API key not configured",
+            detail="TTS service unavailable or misconfigured",
         )
 
     try:
-        audio_data = await tts_service.synthesize(text=request.text, voice_id=request.voice_id)
+        audio_data = await tts_service.synthesize(
+            text=request.text,
+            voice_id=request.voice_id,
+            provider=None,  # enforce server-side provider
+        )
         audio_base64 = base64.b64encode(audio_data).decode("utf-8")
         return TTSResponse(
             success=True,
@@ -61,7 +65,7 @@ async def synthesize_speech(request: TTSRequest):
 
 
 @router.get("/audio")
-async def get_audio_stream(text: str, voice_id: Optional[str] = None):
+async def get_audio_stream(text: str, voice_id: Optional[str] = None, provider: Optional[str] = None):
     """
     Get audio file stream for the given text.
 
@@ -71,14 +75,14 @@ async def get_audio_stream(text: str, voice_id: Optional[str] = None):
     if not tts_service:
         raise HTTPException(
             status_code=503,
-            detail="TTS service unavailable: ElevenLabs API key not configured",
+            detail="TTS service unavailable or misconfigured",
         )
 
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text parameter is required")
 
     try:
-        audio_data = await tts_service.synthesize(text=text, voice_id=voice_id)
+        audio_data = await tts_service.synthesize(text=text, voice_id=voice_id, provider=None)
         return Response(
             content=audio_data,
             media_type="audio/mpeg",
@@ -103,7 +107,7 @@ async def get_available_voices():
     if not tts_service:
         raise HTTPException(
             status_code=503,
-            detail="TTS service unavailable: ElevenLabs API key not configured",
+            detail="TTS service unavailable or misconfigured",
         )
 
     try:
@@ -118,13 +122,13 @@ async def get_available_voices():
 async def health_check():
     """Check TTS service health."""
     if not tts_service:
-        return TTSHealthResponse(status="unhealthy", provider="elevenlabs", error="TTS service not initialized")
+        return TTSHealthResponse(status="unhealthy", provider="unknown", error="TTS service not initialized")
 
     try:
         health = await tts_service.health_check()
         return TTSHealthResponse(**health)
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return TTSHealthResponse(status="unhealthy", provider="elevenlabs", error=str(e))
+        return TTSHealthResponse(status="unhealthy", provider="unknown", error=str(e))
 
 

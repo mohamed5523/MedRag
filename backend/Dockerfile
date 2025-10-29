@@ -3,7 +3,7 @@
 # FROM python:3.11-slim AS base
 
 FROM astral/uv:python3.11-trixie-slim AS base
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

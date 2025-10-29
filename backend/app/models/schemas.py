@@ -7,6 +7,7 @@ from pydantic import BaseModel
 class ChatRequest(BaseModel):
     query: str
     max_results: Optional[int] = 5
+    tts_provider: Optional[str] = None  # Optional override for /query-with-voice
 
 class ChatResponse(BaseModel):
     answer: str
@@ -55,7 +56,7 @@ class HealthResponse(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     voice_id: Optional[str] = None
-
+    provider: Optional[str] = None  # Ignored; provider is server-side configured (supports "openai" | "azure" | "elevenlabs")
 
 class TTSResponse(BaseModel):
     success: bool
