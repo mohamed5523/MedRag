@@ -171,11 +171,10 @@ class TextToSpeech:
                 model=tts_settings.OPENAI_TTS_MODEL,  # e.g. "gpt-4o-mini-tts" or "tts-1"
                 voice=voice_name or tts_settings.OPENAI_TTS_VOICE,
                 input=text,
-                format=tts_settings.OPENAI_TTS_AUDIO_FORMAT,  # e.g. "mp3" or "wav"
+                response_format=tts_settings.OPENAI_TTS_AUDIO_FORMAT,  # e.g. "mp3" or "wav"
                 instructions=instructions,
             )
-            # The SDK returns a binary object with the audio data
-            audio_bytes = await response.read()
+            audio_bytes = await response.aread()
             return audio_bytes
 
         except Exception as e:
