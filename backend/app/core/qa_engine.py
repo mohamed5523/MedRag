@@ -19,11 +19,13 @@ except Exception:
     except Exception:
         from langchain.docstore.document import Document
 from openai import OpenAI
+from opentelemetry import trace
 
 # Load environment variables
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("medrag.qa_engine")
 
 class QAEngine:
     """
@@ -59,19 +61,23 @@ class QAEngine:
             return {
                 "answer": "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.",
                 "sources": [],
+                "context_count": len(contexts),
+                "model_used": self.model,
+                "tokens_used": None,
                 "error": "API key not configured"
             }
         
         try:
-            # Extract text content from documents
-            context_texts = [doc.page_content for doc in contexts]
-            sources = [doc.metadata.get("source", "Unknown") for doc in contexts]
-            
-            # Create context string
-            context_str = "\n\n".join([f"Document {i+1}: {text}" for i, text in enumerate(context_texts)])
-            
-            # Detect if query is in Arabic
-            is_arabic = self._is_arabic_query(question)
+            with tracer.start_as_current_span("prepare_context") as span:
+                context_texts = [doc.page_content for doc in contexts]
+                sources = [doc.metadata.get("source", "Unknown") for doc in contexts]
+                span.set_attribute("context.count", len(context_texts))
+                
+                # Create context string
+                context_str = "\n\n".join([f"Document {i+1}: {text}" for i, text in enumerate(context_texts)])
+                
+                # Detect if query is in Arabic
+                is_arabic = self._is_arabic_query(question)
             
             # Create system prompt for medical context
             if is_arabic:
@@ -97,72 +103,19 @@ class QAEngine:
                     "النُطْق: "
                     "خَلِّي كلامِك بنُطْق مِصري طَبِيعِي وسَلِس، يِدِّي إحسَاس بالاهتِمام والرِّقَّة مع المريض. "
                     "اِفْتَكِرِي إنِّك مُمَثِّلَة صَوْتِيَّة أُنثَى، فَاسْتَخْدِمِي ضَمَايِر ومُفرَدات أنثَوِيَّة زَيّ: خايفَة، شايفَة، مُتَأَكِّدَة، قُلتِ، رُحتِ. "
+                    "ضِيفِي تَشكِيل خَفِيف فَقَط لَمَّا يِكُون هِيِسَاعِد فِي النُطْق أو يِمْنَع لَبس، "
+                    "زَيّ: تِتَواصَلِي، يِقْدَر، يُمْكِن، يُسَاعِد، أُخْدُه، مَفِيش. "
                     "\n"
                     "الأَرْقَام والأَوْقَات والتَّوَارِيخ: "
                     "مُمكِن تِكْتِبِيها بِالأَرْقَام عَادِي (زي 3:30 أو 27/10/2025)، والمُحرِّك هِيِقْرَاها بِصُوت مِصري صَحّ. "
                     "\n"
                     "مَهْمَا يِكُون السُّؤَال، مَتِجَاوِبِيش غِير بِالاعْتِمَاد على المَعْلُومَات المَوْجُودَة فِي المَسْتَنَدَات الطِّبِّيَّة المُتَاحَة (context_str). "
                     "لَو المَعْلُومَة مِش مَوْجُودَة فِي المَسْتَنَدَات، قُولِي بِوُضُوح إنِّك مِش مُتَأَكِّدَة. "
-                    "وَلَو السُّؤَال يِحْتَاج تَدَخُّل فَوْرِي، نَبِّهِي المَريض يِتْوَاصَل مَع دُكتور حالًا."
-                )
-
-                system_prompt = (
-                    "إنت مُساعِد طِبِّي ذَكِي اسمك كيميت شَغَّال في مُسْتَشْفى مِصري. "
-                    "دَورَك إنَّك تِسَاعِد المَرضَى وتِرُدّ على أَسْئِلَتِهِم بالعَامِّيَّة المِصريَّة بشكل وَاضِح وسَهْل. "
-                    "\n"
-                    "قَوَاعِد الإِخْرَاج (إِلزَامِيَّة): "
-                    "1. مَتِسْتَخْدِمش أي رُموز أو تَنْسِيق زي: * _ # [ ] ( ) ` ~ > | - ! … . "
-                    "2. مَتِسْتَخْدِمش قَوَايِم أو نُقَط في أول السطور. "
-                    "3. وَسِّع كُلّ الاختصارات زي 'د.'، 'د/'، 'Dr.' إلى 'دُكتور'. "
-                    "4. مَتِسْتَخْدِمش 'ص' أو 'م' بعد الوقت. اكتُب الوقت بالكَلام، زَيّ: "
-                    "   'من السَّاعَة تِسعَة الصُبح لِحدّ السَّاعَة اِتنين بعد الضُهر'. "
-                    "5. مَتِكْرَّرش علامات التَّرقِيم (زي !!! أو ...). "
-                    "6. مَتِسْتَخْدِمش وِجُوه تَعبِيرِيَّة أو زَخْرَفَة. "
-                    "7. اكتُب النَّص في فَقْرَة واحدة متَّصِلَة. "
-                    "8. بَعْد مَا تِخْلَص، راجِع الرَّدّ وتَأَكِّد إِن مَفيش أي رمز أو اختصار مخالف. "
-                    "\n"
-                    "ضِيف تَشْكِيل بِيُسَاعِد على النُطْق المِصري، خَاصَّة للكَلِمَات اللي ليها أَكْتَر من مَعْنَى أو نُطْق، زي: "
-                    "- دَقِيقَة (وَقْت) / دَقيقَة (صِفَة) "
-                    "- ساعَة (وَقْت) "
-                    "- دَواء، عِلاج، مِيعاد، كَشْف، دُكتور "
-                    "- أَفْعَال مِتِكَرَّرَة زي يُمْكِن، يَجِب، نُقَدِّم، تِرُوح، تِجِي "
-                    "\n"
-                    "كَمَان ضِيف تَشكِيل لِلأَسَامِي والألْقَاب عَشان النُطْق يِبْقَى صَحّ، "
-                    "زَيّ: دُكتور أحمَد مَنسُور، سَارة الجَمَّال، خالِد عَبْد الرَّحمَن. "
-                    "\n"
-                    "الأَرْقَام: "
-                    "مَتِكْتِبْهَاش بِأَرْقَام (زي ١ أو 2)، اِكْتِبها بِالكَلام وبنُطْق مِصري: "
-                    "واحِد، اِتنين، تَلاتة، أربَعَة، خَمْسَة، سِتَّة، سَبْعَة، تَمَانِيَة، تِسْعَة، عَشَرَة، حَدَاشَر، اِتناشَر. "
-                    "وَلَو رَقْم كَبِير اكتُبه زَيّ ما المِصري بيقُول، زَيّ: أربَعَة وعِشْرين. "
-                    "\n"
-                    "الأَوْقَات: "
-                    "مَتِكْتِبْهَاش بِالأَرْقَام، اكتُبها بِنُطْق عَامِّي طَبِيعِي: "
-                    "السَّاعَة واحْدَة، اِتنين، تَلاتة ونُصّ، أربَعَة إلَّا رُبْع، خَمْسَة ونُصّ، سِتَّة إلَّا تِلت، سَبْعَة الصُبح، تِمَانِيَة بعد الضُهر، تِسعَة بالليل. "
-                    "\n"
-                    "أَيّ وَقت مَكْتُوب بِالأَرْقَام زَيّ (3:30 م) حَوِّله لِنُطْق مِصري زَيّ: "
-                    "'السَّاعَة تِلاتة ونُصّ المَغرب' أو 'السَّاعَة تِلاتة ونُصّ بعد الضُهر'. "
-                    "\n"
-                    "الأَيَّام: "
-                    "لَو اللُّغَة فُصْحَى حَوِّلها لِلنُطْق المِصري: "
-                    "الأحَد، التَنين (الإثنين)، التَلات (الثلاثاء)، الأربَع (الأربعاء)، الخَمِيس، الجُمعة، السَّبْت. "
-                    "\n"
-                    "اِفْهَم إن التَّشكِيل هِنا تَشكِيل تَوضِيحِي لِلنُطْق المِصري مش فُصْحَى بَحْت. "
-                    "مِثَال: قُول 'دَقِيقَة وَاحْدَة' مش 'دَقِيقَةٌ وَاحِدَةٌ'. "
-                    "\n"
-                    "اِسْتَخْدِم كَلِمَات مِصْرِيَّة زَيّ: "
-                    "دُكتور/دُكتورة بدل طبيب/طبيبة، "
-                    "مِيعاد بدل موعد، "
-                    "إزَّيَّك بدل كيف حالك، "
-                    "أيوَة بدل نعم، "
-                    "لأ بدل لا. "
-                    "\n"
-                    "مَهْمَا يِكُون السُّؤَال، مَتِجَاوِبْش غِير بِالاعْتِمَاد على المَعْلُومَات المَوْجُودَة فِي المَسْتَنَدَات الطِّبِّيَّة المُتَاحَة (context_str). "
-                    "لَو المَعْلُومَة مِش مَوْجُودَة فِي المَسْتَنَدَات، قُول بوضُوح إنَّك مَش مُتَأَكِّد. "
-                    "وَلَو السُّؤَال يِحْتَاج تَدَخُّل فَوْرِي، نَبِّه المَريض يِتْوَاصَل مَع دُكتور حالًا."
+                    "وَلَو السُّؤَال يِحْتَاج تَدَخُّل فَوْرِي، نَبِّهِي المَريض يِتَواصَل مَع دُكتور حالًا."
                 )
 
             else:
-                system_prompt = (
+                system_prompt_openai_tts = (
                     "You are a knowledgeable medical assistant. "
                     "Answer the user's question based strictly on the provided medical documents and context. "
                     "If the information is not available in the context, clearly state that you don't have enough information. "
@@ -234,14 +187,16 @@ Please provide a comprehensive answer based on the available information.
                 {"role": "user", "content": user_message}
             ]
             
-            # Generate response
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.1,  # Low temperature for more consistent medical responses
-                max_tokens=500,
-                top_p=0.9
-            )
+            # Generate response (OpenAI SDK spans will be captured by instrumentation)
+            with tracer.start_as_current_span("generate_with_openai") as span:
+                span.set_attribute("model", self.model)
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=500,
+                    top_p=0.9
+                )
             
             answer = response.choices[0].message.content.strip()
             
@@ -261,6 +216,9 @@ Please provide a comprehensive answer based on the available information.
             return {
                 "answer": f"I encountered an error while processing your question: {str(e)}",
                 "sources": [],
+                "context_count": len(contexts),
+                "model_used": self.model,
+                "tokens_used": None,
                 "error": str(e)
             }
     

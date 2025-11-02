@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -6,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .api import analytics, asr, chat, documents, tts, whatsapp
+from .observability.phoenix import init_observability
 
 # Create FastAPI app
 app = FastAPI(
@@ -13,6 +13,9 @@ app = FastAPI(
     description="Medical RAG system backend with document processing and AI chat",
     version="1.0.0"
 )
+
+# Initialize observability (Phoenix via OTLP)
+init_observability(app)
 
 # Configure CORS for React frontend
 app.add_middleware(

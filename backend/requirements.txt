@@ -32,3 +32,10 @@ supabase>=2.4.0
 # Development
 pytest==7.4.3
 httpx==0.25.2
+
+# Observability
+opentelemetry-sdk>=1.23.0
+opentelemetry-exporter-otlp-proto-http>=1.23.0
+openinference-instrumentation-fastapi>=0.1.14
+openinference-instrumentation-openai>=0.1.14
+openinference-instrumentation-langchain>=0.1.14

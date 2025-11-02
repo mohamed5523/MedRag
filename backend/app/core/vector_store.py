@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,8 +15,10 @@ except Exception:
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from opentelemetry import trace
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("medrag.vector_store")
 
 class VectorStore:
     """
@@ -46,9 +49,10 @@ class VectorStore:
         Returns the number of chunks created.
         """
         try:
-            # Split text into chunks
-            chunks = self.text_splitter.split_text(raw_text)
-            logger.info(f"Split document {source} into {len(chunks)} chunks")
+            with tracer.start_as_current_span("split_text") as span:
+                chunks = self.text_splitter.split_text(raw_text)
+                span.set_attribute("chunks.count", len(chunks))
+                logger.info(f"Split document {source} into {len(chunks)} chunks")
             
             # Create documents with metadata
             docs = [
@@ -60,14 +64,16 @@ class VectorStore:
             ]
             
             # Get or create vector store
-            vector_store = Chroma(
-                collection_name=self.collection_name,
-                embedding_function=self.embeddings,
-                persist_directory=self.persist_dir,
-            )
-            
-            # Add documents to vector store
-            vector_store.add_documents(docs)
+            with tracer.start_as_current_span("index_documents") as span:
+                span.set_attribute("docs.count", len(docs))
+                vector_store = Chroma(
+                    collection_name=self.collection_name,
+                    embedding_function=self.embeddings,
+                    persist_directory=self.persist_dir,
+                )
+                
+                # Add documents to vector store
+                vector_store.add_documents(docs)
             logger.info(f"Successfully indexed {len(docs)} chunks from {source}")
             
             return len(docs)
@@ -81,14 +87,32 @@ class VectorStore:
         Retrieve top-k most relevant chunks from ChromaDB.
         """
         try:
-            vector_store = Chroma(
-                collection_name=self.collection_name,
-                embedding_function=self.embeddings,
-                persist_directory=self.persist_dir,
-            )
-            
-            # Search with query prefix for better retrieval
-            docs = vector_store.similarity_search(f"query: {query}", k=top_k)
+            with tracer.start_as_current_span("similarity_search") as span:
+                span.set_attribute("query.length", len(query))
+                span.set_attribute("top_k", top_k)
+                span.set_attribute("embed_model", self.embed_model)
+                span.add_event("search.started", {"timestamp": datetime.now().isoformat()})
+                
+                vector_store = Chroma(
+                    collection_name=self.collection_name,
+                    embedding_function=self.embeddings,
+                    persist_directory=self.persist_dir,
+                )
+                
+                # Search with query prefix for better retrieval
+                docs = vector_store.similarity_search(f"query: {query}", k=top_k)
+                
+                span.set_attribute("results.count", len(docs))
+                if docs:
+                    # Add source information
+                    sources = [doc.metadata.get("source", "Unknown") for doc in docs]
+                    span.set_attribute("sources.count", len(set(sources)))
+                    span.set_attribute("unique_sources", list(set(sources))[:5])  # Limit to 5
+                
+                span.add_event("search.completed", {
+                    "documents_found": len(docs),
+                    "timestamp": datetime.now().isoformat()
+                })
             logger.info(f"Retrieved {len(docs)} documents for query: {query[:50]}...")
             
             return docs
@@ -100,21 +124,22 @@ class VectorStore:
     def get_collection_stats(self) -> dict:
         """Get statistics about the vector store collection."""
         try:
-            vector_store = Chroma(
-                collection_name=self.collection_name,
-                embedding_function=self.embeddings,
-                persist_directory=self.persist_dir,
-            )
-            
-            # Get collection info
-            collection = vector_store._collection
-            count = collection.count()
-            
-            return {
-                "total_documents": count,
-                "collection_name": self.collection_name,
-                "embed_model": self.embed_model
-            }
+            with tracer.start_as_current_span("get_collection_stats"):
+                vector_store = Chroma(
+                    collection_name=self.collection_name,
+                    embedding_function=self.embeddings,
+                    persist_directory=self.persist_dir,
+                )
+                
+                # Get collection info
+                collection = vector_store._collection
+                count = collection.count()
+                
+                return {
+                    "total_documents": count,
+                    "collection_name": self.collection_name,
+                    "embed_model": self.embed_model
+                }
             
         except Exception as e:
             logger.error(f"Error getting collection stats: {str(e)}")

@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 
 try:
     from groq import Groq
@@ -16,6 +17,7 @@ except Exception:  # pragma: no cover
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("medrag.asr")
 
 router = APIRouter()
 
@@ -44,26 +46,31 @@ async def transcribe_audio(
         raise HTTPException(status_code=500, detail="Groq SDK not installed")
 
     try:
-        data = await audio_file.read()
-        if not data:
-            raise HTTPException(status_code=400, detail="Empty audio file")
+        with tracer.start_as_current_span("read_input") as span:
+            data = await audio_file.read()
+            span.set_attribute("filename", audio_file.filename or "unknown")
+            span.set_attribute("size", len(data) if data else 0)
+            if not data:
+                raise HTTPException(status_code=400, detail="Empty audio file")
 
         # Optionally save input audio to disk under uploads/voice
         if save:
-            uploads_dir = Path("uploads")
-            voice_dir = uploads_dir / "voice"
-            voice_dir.mkdir(parents=True, exist_ok=True)
-            base_name = audio_file.filename or "recording.webm"
-            ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
-            sid = session_id or "anon"
-            safe_name = f"{sid}_{ts}_{base_name}"
-            target_path = voice_dir / safe_name
-            try:
-                with open(target_path, "wb") as f:
-                    f.write(data)
-                logger.info("Saved input audio to %s", target_path)
-            except Exception as ex:
-                logger.warning("Failed to save input audio: %s", ex)
+            with tracer.start_as_current_span("save_input") as span:
+                uploads_dir = Path("uploads")
+                voice_dir = uploads_dir / "voice"
+                voice_dir.mkdir(parents=True, exist_ok=True)
+                base_name = audio_file.filename or "recording.webm"
+                ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S%fZ")
+                sid = session_id or "anon"
+                safe_name = f"{sid}_{ts}_{base_name}"
+                target_path = voice_dir / safe_name
+                span.set_attribute("path", str(target_path))
+                try:
+                    with open(target_path, "wb") as f:
+                        f.write(data)
+                    logger.info("Saved input audio to %s", target_path)
+                except Exception as ex:
+                    logger.warning("Failed to save input audio: %s", ex)
 
         client = Groq(api_key=api_key)
 
@@ -71,12 +78,14 @@ async def transcribe_audio(
         buf = io.BytesIO(data)
         buf.name = audio_file.filename or "audio.webm"
 
-        # Ask for plain text to simplify handling
-        result = client.audio.transcriptions.create(
-            model=model,
-            file=buf,  # type: ignore[arg-type]
-            response_format="text",
-        )
+        with tracer.start_as_current_span("groq.transcribe") as span:
+            span.set_attribute("model", model)
+            # Ask for plain text to simplify handling
+            result = client.audio.transcriptions.create(
+                model=model,
+                file=buf,  # type: ignore[arg-type]
+                response_format="text",
+            )
 
         # The SDK may return a plain string for response_format="text"
         if isinstance(result, str):

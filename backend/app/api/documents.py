@@ -7,12 +7,14 @@ from typing import List
 from connect2supabase import supabase
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 
 from ..core.document_processor import DocumentProcessor
 from ..core.vector_store import VectorStore
 from ..models.schemas import DocumentInfo, DocumentUploadResponse
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("medrag.documents")
 
 router = APIRouter()
 
@@ -34,11 +36,12 @@ async def upload_document(file: UploadFile = File(...)):
     
     try:
         # Validate file type
-        if not document_processor.is_supported_file(file.filename):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type. Supported formats: {document_processor.get_supported_extensions()}"
-            )
+        with tracer.start_as_current_span("validate_file"):
+            if not document_processor.is_supported_file(file.filename):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type. Supported formats: {document_processor.get_supported_extensions()}"
+                )
         
         # Generate unique filename
         file_extension = Path(file.filename).suffix
@@ -46,21 +49,25 @@ async def upload_document(file: UploadFile = File(...)):
         file_path = UPLOAD_DIR / unique_filename
         
         # Save uploaded file
-        content = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
+        with tracer.start_as_current_span("save_file") as span:
+            content = await file.read()
+            span.set_attribute("filename", file.filename)
+            span.set_attribute("target", str(file_path))
+            with open(file_path, "wb") as f:
+                f.write(content)
         
         logger.info(f"Saved uploaded file: {file.filename} as {unique_filename}")
         
         # Process document
         try:
-            raw_text = document_processor.load_document(file_path)
-            
-            if not raw_text.strip():
-                raise ValueError("Document appears to be empty or unreadable")
-            
-            # Build vector index
-            chunks_created = vector_store.build_index(raw_text, file.filename)
+            with tracer.start_as_current_span("process_document"):
+                raw_text = document_processor.load_document(file_path)
+                
+                if not raw_text.strip():
+                    raise ValueError("Document appears to be empty or unreadable")
+                
+                # Build vector index
+                chunks_created = vector_store.build_index(raw_text, file.filename)
             
             processing_time = time.time() - start_time
             

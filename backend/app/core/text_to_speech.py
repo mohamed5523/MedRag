@@ -5,11 +5,13 @@ from typing import Optional
 
 from elevenlabs import ElevenLabs
 from openai import AsyncOpenAI
+from opentelemetry import trace
 
 from .tts_exceptions import TextToSpeechError
 from .tts_settings import tts_settings
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("medrag.tts")
 
 # Azure SDK import
 try:
@@ -77,37 +79,43 @@ class TextToSpeech:
         selected_provider = (self.provider).lower()
 
         try:
-            if selected_provider == "openai":
-                selected_voice = voice_id or tts_settings.OPENAI_TTS_VOICE
-                logger.info(f"[OpenAI TTS] Synthesizing with voice: {selected_voice}")
-                audio_bytes = await self._openai_synthesize(text, selected_voice)
-                if not audio_bytes:
-                    raise TextToSpeechError("Generated audio is empty")
-                logger.info(f"[OpenAI TTS] Generated audio: {len(audio_bytes)} bytes")
-                return audio_bytes
+            with tracer.start_as_current_span("tts.synthesize") as span:
+                span.set_attribute("provider", selected_provider)
+                span.set_attribute("text.length", len(text))
+                if selected_provider == "openai":
+                    selected_voice = voice_id or tts_settings.OPENAI_TTS_VOICE
+                    span.set_attribute("voice", selected_voice)
+                    logger.info(f"[OpenAI TTS] Synthesizing with voice: {selected_voice}")
+                    audio_bytes = await self._openai_synthesize(text, selected_voice)
+                    if not audio_bytes:
+                        raise TextToSpeechError("Generated audio is empty")
+                    logger.info(f"[OpenAI TTS] Generated audio: {len(audio_bytes)} bytes")
+                    return audio_bytes
 
-            if selected_provider == "azure":
-                selected_voice = voice_id or tts_settings.AZURE_TTS_VOICE
-                logger.info(f"[Azure TTS] Synthesizing with voice: {selected_voice}")
-                audio_bytes = await self._azure_synthesize(text, selected_voice)
-                if not audio_bytes:
-                    raise TextToSpeechError("Generated audio is empty")
-                logger.info(f"[Azure TTS] Generated audio: {len(audio_bytes)} bytes")
-                return audio_bytes
+                if selected_provider == "azure":
+                    selected_voice = voice_id or tts_settings.AZURE_TTS_VOICE
+                    span.set_attribute("voice", selected_voice)
+                    logger.info(f"[Azure TTS] Synthesizing with voice: {selected_voice}")
+                    audio_bytes = await self._azure_synthesize(text, selected_voice)
+                    if not audio_bytes:
+                        raise TextToSpeechError("Generated audio is empty")
+                    logger.info(f"[Azure TTS] Generated audio: {len(audio_bytes)} bytes")
+                    return audio_bytes
 
-            if selected_provider == "elevenlabs":
-                selected_voice_id = voice_id or (tts_settings.ELEVENLABS_VOICE_ID or "")
-                logger.info(f"[ElevenLabs] Synthesizing with voice: {selected_voice_id}")
-                audio_generator = self.client.text_to_speech.convert(
-                    text=text,
-                    voice_id=selected_voice_id,
-                    model_id=tts_settings.ELEVENLABS_MODEL,
-                )
-                audio_bytes = b"".join(audio_generator)
-                if not audio_bytes:
-                    raise TextToSpeechError("Generated audio is empty")
-                logger.info(f"[ElevenLabs] Generated audio: {len(audio_bytes)} bytes")
-                return audio_bytes
+                if selected_provider == "elevenlabs":
+                    selected_voice_id = voice_id or (tts_settings.ELEVENLABS_VOICE_ID or "")
+                    span.set_attribute("voice", selected_voice_id)
+                    logger.info(f"[ElevenLabs] Synthesizing with voice: {selected_voice_id}")
+                    audio_generator = self.client.text_to_speech.convert(
+                        text=text,
+                        voice_id=selected_voice_id,
+                        model_id=tts_settings.ELEVENLABS_MODEL,
+                    )
+                    audio_bytes = b"".join(audio_generator)
+                    if not audio_bytes:
+                        raise TextToSpeechError("Generated audio is empty")
+                    logger.info(f"[ElevenLabs] Generated audio: {len(audio_bytes)} bytes")
+                    return audio_bytes
 
             raise ValueError("Unsupported provider. Use 'openai', 'azure' or 'elevenlabs'.")
 

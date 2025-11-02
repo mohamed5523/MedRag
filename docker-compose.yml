@@ -4,6 +4,8 @@ services:
       context: ./backend
     env_file:
       - ./backend/.env
+    environment:
+      - OTLP_HTTP_ENDPOINT=http://phoenix:6006/v1/traces
     volumes:
       - ./backend/uploads:/app/uploads
       - ./data/chroma_db:/app/data/chroma_db
@@ -11,12 +13,25 @@ services:
       - "8000:8000"
     networks:
       - medrag
+    depends_on:
+      phoenix:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"] # test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 90s
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: phoenix
+    ports:
+      - "6006:6006" # Phoenix UI
+      - "4318:4318" # OTLP HTTP receiver
+    networks:
+      - medrag
+    # No healthcheck needed - backend uses service_started and handles connection failures gracefully
 
   frontend:
     build:
