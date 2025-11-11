@@ -14,7 +14,7 @@ dependencies = [
     "langchain",
     "langchain-community",
     "langchain-text-splitters",
-    "chromadb",
+    "weaviate-client",
     "sentence-transformers",
     # --- Document loaders ---
     "pypdf",
@@ -25,7 +25,7 @@ dependencies = [
     # --- Utility ---
     "tiktoken", # optional, helps with token counting
     "langchain-huggingface>=0.3.1",
-    "langchain-chroma>=0.2.5",
+    "langchain-weaviate>=0.0.1,<1.0.0",
     "python-dotenv>=1.1.1",
     "python-multipart>=0.0.20",
     "supabase>=2.19.0",
@@ -43,4 +43,6 @@ dependencies = [
     "openinference-instrumentation-openai>=0.1.39",
     "openinference-instrumentation-langchain>=0.1.54",
     "opentelemetry-instrumentation-fastapi>=0.59b0",
+    "redis>=7.0.1",
+    "fakeredis>=2.32.1",
 ]

@@ -1,4 +1,32 @@
 services:
+  weaviate:
+    image: semitechnologies/weaviate:1.28.6
+    container_name: weaviate
+    ports:
+      - "8081:8080" # Weaviate API (changed from 8080 to avoid conflict with frontend)
+    env_file:
+      - ./backend/.env
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    networks:
+      - medrag
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "--quiet",
+          "--tries=1",
+          "--timeout=10",
+          "http://localhost:8080/v1/meta",
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 30s
+
   backend:
     build:
       context: ./backend
@@ -6,9 +34,11 @@ services:
       - ./backend/.env
     environment:
       - OTLP_HTTP_ENDPOINT=http://phoenix:6006/v1/traces
+      - WEAVIATE_URL=http://weaviate:8080
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./backend/uploads:/app/uploads
-      - ./data/chroma_db:/app/data/chroma_db
     ports:
       - "8000:8000"
     networks:
@@ -16,12 +46,31 @@ services:
     depends_on:
       phoenix:
         condition: service_started
+      weaviate:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"] # test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 20
-      start_period: 90s
+      start_period: 120s
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - medrag
+    restart: unless-stopped
 
   phoenix:
     image: arizephoenix/phoenix:latest
@@ -55,6 +104,9 @@ services:
 networks:
   medrag:
     driver: bridge
+
+volumes:
+  weaviate_data:
 # Optional: switch to named volumes by uncommenting and updating service volumes
 #volumes:
 #  chroma_data:

@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import List
+from typing import Any, Dict, List
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
@@ -52,7 +52,71 @@ class QAEngine:
         # Consider it Arabic if more than 50% of alphabetic characters are Arabic
         return total_chars > 0 and (arabic_chars / total_chars) > 0.5
     
-    def answer_question(self, question: str, contexts: List[Document], now_dt: datetime | None = None) -> dict:
+    def build_time_context(self, question: str, now_dt: datetime | None = None) -> Dict[str, Any]:
+        """Prepare date/time context strings for a query."""
+
+        tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
+        if now_dt is None:
+            now_dt = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
+
+        is_arabic = self._is_arabic_query(question)
+
+        weekday_ar = {
+            "Saturday": "السبت",
+            "Sunday": "الأحد",
+            "Monday": "الاتنين",
+            "Tuesday": "التلات",
+            "Wednesday": "الأربع",
+            "Thursday": "الخميس",
+            "Friday": "الجمعة",
+        }
+        months_ar = [
+            "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+            "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
+        ]
+
+        if is_arabic:
+            weekday_str = weekday_ar.get(now_dt.strftime("%A"), now_dt.strftime("%A"))
+            month_str = months_ar[now_dt.month - 1]
+            date_hint = f"النهاردة {weekday_str}، {now_dt.day} {month_str} {now_dt.year}."
+        else:
+            date_hint = f"Today is {now_dt.strftime('%A')}, {now_dt.strftime('%b %d, %Y')}\."
+
+        time_context_message = (
+            f"{date_hint} Current timezone: {tz_name}. "
+            "Interpret relative dates (e.g., 'tomorrow') relative to this time."
+        )
+
+        return {
+            "now_dt": now_dt,
+            "tz_name": tz_name,
+            "is_arabic": is_arabic,
+            "date_hint": date_hint,
+            "time_context_message": time_context_message,
+        }
+
+    def rewrite_query_with_date_hint(
+        self, question: str, time_context: Dict[str, Any] | None = None
+    ) -> tuple[str, Dict[str, Any]]:
+        """Append the computed date hint to the user query."""
+
+        ctx = time_context or self.build_time_context(question)
+        date_hint = ctx["date_hint"]
+        tz_name = ctx["tz_name"]
+        rewritten = (
+            f"{question.strip()}\n\n"
+            f"Date hint: {date_hint} Current timezone: {tz_name}."
+        )
+        return rewritten, ctx
+
+    def answer_question(
+        self,
+        question: str,
+        contexts: List[Document],
+        now_dt: datetime | None = None,
+        time_context: Dict[str, Any] | None = None,
+        chat_history: List[Dict[str, str]] | None = None,
+    ) -> dict:
         """
         Generate an answer to the question using the provided contexts.
         Returns a dictionary with answer, sources, and metadata.
@@ -76,8 +140,8 @@ class QAEngine:
                 # Create context string
                 context_str = "\n\n".join([f"Document {i+1}: {text}" for i, text in enumerate(context_texts)])
                 
-                # Detect if query is in Arabic
-                is_arabic = self._is_arabic_query(question)
+                ctx = time_context or self.build_time_context(question, now_dt)
+                is_arabic = ctx["is_arabic"]
             
             # Create system prompt for medical context
             if is_arabic:
@@ -112,6 +176,8 @@ class QAEngine:
                     "مَهْمَا يِكُون السُّؤَال، مَتِجَاوِبِيش غِير بِالاعْتِمَاد على المَعْلُومَات المَوْجُودَة فِي المَسْتَنَدَات الطِّبِّيَّة المُتَاحَة (context_str). "
                     "لَو المَعْلُومَة مِش مَوْجُودَة فِي المَسْتَنَدَات، قُولِي بِوُضُوح إنِّك مِش مُتَأَكِّدَة. "
                     "وَلَو السُّؤَال يِحْتَاج تَدَخُّل فَوْرِي، نَبِّهِي المَريض يِتَواصَل مَع دُكتور حالًا."
+                    "مَتِفْتِرِضِيش أي علاقَة أو معلومَة مَش مَكتوبَة في المستندات، "
+                    "ولو فيه أكتر من تخصص، خُدِي بس المعلُومَات اللي ليها علاقة بالسؤال نفسه."
                 )
 
             else:
@@ -142,12 +208,12 @@ class QAEngine:
 """
             else:
                 user_message = f"""
-Question: {question}
+السؤال: {question}
 
-Context from medical documents:
+المستندات التي ليها علاقة بالسؤال:
 {context_str}
 
-Please provide a comprehensive answer based on the available information.
+الرجاء تقديم إجابة شاملة بناءً على المعلومات المتاحة فقط.
 """
             
             # Add time context based on Egypt timezone (Africa/Cairo) to ground relative dates
@@ -181,11 +247,20 @@ Please provide a comprehensive answer based on the available information.
                 f"Interpret relative dates (e.g., 'tomorrow') relative to this time."
             )
 
-            messages = [
+            # Build conversation with optional prior history
+            messages: List[Dict[str, str]] = [
                 {"role": "system", "content": system_prompt_openai_tts},
                 {"role": "system", "content": time_context_message},
-                {"role": "user", "content": user_message}
             ]
+            # Inject prior turns (if provided). Expect roles "user" or "assistant".
+            if chat_history:
+                for msg in chat_history:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if role in ("user", "assistant") and content:
+                        messages.append({"role": role, "content": content})
+            # Current user turn with retrieved context
+            messages.append({"role": "user", "content": user_message})
             
             # Generate response (OpenAI SDK spans will be captured by instrumentation)
             with tracer.start_as_current_span("generate_with_openai") as span:
@@ -193,7 +268,7 @@ Please provide a comprehensive answer based on the available information.
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
-                    temperature=0.1,
+                    temperature=0,
                     max_tokens=500,
                     top_p=0.9
                 )

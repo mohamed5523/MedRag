@@ -195,7 +195,7 @@ async def delete_supabase_document(payload: dict = Body(...)):
         if not storage_path:
             raise HTTPException(status_code=404, detail="storage_path not found")
 
-        # 1) Delete vectors from Chroma by source = storage_path
+        # 1) Delete vectors from Weaviate by source = storage_path
         try:
             vector_store.delete_documents_by_source(storage_path)
         except Exception as e:

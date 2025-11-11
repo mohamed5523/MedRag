@@ -3,19 +3,19 @@ import logging
 import os
 import time
 from datetime import datetime
+from typing import Optional
 
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-except Exception:
-    ZoneInfo = None  # type: ignore[assignment]
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from opentelemetry import trace
 
+from ..core.conversation_memory import short_term_memory
 from ..core.qa_engine import QAEngine
+from ..core.session_manager import session_manager
 from ..core.text_to_speech import TextToSpeech
 from ..core.vector_store import VectorStore
 from ..models.schemas import ChatRequest, ChatResponse, ChatResponseWithAudio
+
+logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.chat")
@@ -33,7 +33,7 @@ except Exception as e:
     tts_service = None
 
 @router.post("/query", response_model=ChatResponse)
-async def query_documents(request: ChatRequest):
+async def query_documents(request: ChatRequest, x_session_id: Optional[str] = Header(None)):
     """
     Process a user query and return an AI-generated answer based on the document collection.
     All operations are traced with detailed spans visible in Phoenix.
@@ -49,7 +49,64 @@ async def query_documents(request: ChatRequest):
         
         try:
             start_time = time.time()
-            
+            session_id = session_manager.get_or_create(x_session_id)
+            # Add user message to Redis
+            short_term_memory.add_message(session_id, "user", request.query)
+
+            # Retrieve conversation history
+            history = short_term_memory.get_messages(session_id, limit=5)
+            history_ctx = short_term_memory.get_formatted_context(session_id, last_n=5)
+            root_span.set_attribute("conversation.length", len(history))
+            root_span.set_attribute("conversation.has_context", bool(history_ctx))
+            # Log a concise view of the history and the context string used for rewriting
+            try:
+                history_preview = [
+                    {
+                        "role": msg.role,
+                        "content": (msg.content[:200] + "...") if len(msg.content) > 200 else msg.content,
+                        "ts": msg.timestamp,
+                    }
+                    for msg in history
+                ]
+                logger.info(
+                    "Session %s history (%d msgs): %s",
+                    session_id[:16] + "...",
+                    len(history_preview),
+                    history_preview,
+                )
+                if history_ctx:
+                    logger.info(
+                        "Session %s history_ctx used for rewrite (len=%d): %s",
+                        session_id[:16] + "...",
+                        len(history_ctx),
+                        history_ctx[:1000] + ("..." if len(history_ctx) > 1000 else ""),
+                    )
+            except Exception as _log_err:
+                logger.debug("Unable to log history preview: %s", _log_err)
+            # Rewrite query to include explicit date hint for retrieval
+            rewritten_query = request.query
+            time_context = qa_engine.build_time_context(request.query)
+            with tracer.start_as_current_span("rewrite_query") as span:
+                # If we have context, prepend it in a compact form for retrieval and generation
+                if history_ctx:
+                    rewritten_query = f"{history_ctx}\n\nCurrent user message: {request.query}"
+                rewritten_query, time_context = qa_engine.rewrite_query_with_date_hint(
+                    rewritten_query, time_context=time_context
+                )
+                span.set_attribute("query.rewritten", rewritten_query[:200])
+                span.set_attribute("date_hint", time_context["date_hint"])
+                span.set_attribute("timezone", time_context["tz_name"])
+            # Log the final rewritten query that will influence retrieval and LLM prompting
+            try:
+                logger.info(
+                    "Session %s rewritten_query (len=%d): %s",
+                    session_id[:16] + "...",
+                    len(rewritten_query),
+                    rewritten_query[:1000] + ("..." if len(rewritten_query) > 1000 else ""),
+                )
+            except Exception as _log_err:
+                logger.debug("Unable to log rewritten query: %s", _log_err)
+
             # Validate query
             with tracer.start_as_current_span("validate_input") as span:
                 if not request.query.strip():
@@ -78,7 +135,7 @@ async def query_documents(request: ChatRequest):
                 span.add_event("retrieval.started", {"timestamp": datetime.now().isoformat()})
                 
                 relevant_docs = vector_store.retrieve(
-                    query=request.query, 
+                    query=rewritten_query,
                     top_k=request.max_results or 5
                 )
                 
@@ -97,28 +154,40 @@ async def query_documents(request: ChatRequest):
             
             if not relevant_docs:
                 root_span.set_attribute("response.no_documents", True)
+                response_text = (
+                    "I don't have any relevant information in my knowledge base to answer your question. Please try rephrasing your question or ensure that relevant documents have been uploaded."
+                )
+                # Save assistant response for continuity
+                short_term_memory.add_message(session_id, "assistant", response_text)
                 return ChatResponse(
-                    answer="I don't have any relevant information in my knowledge base to answer your question. Please try rephrasing your question or ensure that relevant documents have been uploaded.",
+                    answer=response_text,
                     sources=[],
                     context_count=0,
                     model_used=qa_engine.model,
                     tokens_used=0
                 )
             
-            # Compute Egypt-local 'now' and pass to QA engine to ground relative dates
-            tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
-            now_local = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
-
-            # Generate answer using QA engine with time context
+            # Generate answer using QA engine with time context and prior chat history
             answer_start = time.time()
             with tracer.start_as_current_span("generate_answer") as span:
                 span.set_attribute("context.count", len(relevant_docs))
                 span.set_attribute("model", qa_engine.model)
-                span.set_attribute("timezone", tz_name)
+                span.set_attribute("timezone", time_context["tz_name"])
+                # Prepare prior turns for LLM (oldest-first)
+                history_payload = [
+                    {"role": m.role, "content": m.content}
+                    for m in history
+                    if m.content
+                ]
                 span.add_event("answer.generation.started", {"timestamp": datetime.now().isoformat()})
                 
-                result = qa_engine.answer_question(request.query, relevant_docs, now_dt=now_local)
-                
+                result = qa_engine.answer_question(
+                    question=rewritten_query,
+                    contexts=relevant_docs,
+                    time_context=time_context,
+                    chat_history=history_payload,
+                )
+
                 answer_time = time.time() - answer_start
                 span.set_attribute("answer.length", len(result.get("answer", "")))
                 span.set_attribute("tokens_used", result.get("tokens_used", 0))
@@ -128,6 +197,9 @@ async def query_documents(request: ChatRequest):
                     "duration_ms": answer_time * 1000,
                     "tokens_used": result.get("tokens_used", 0)
                 })
+            
+            # Save assistant reply for multi-turn continuity
+            short_term_memory.add_message(session_id, "assistant", result.get("answer", ""))
             
             processing_time = time.time() - start_time
             root_span.set_attribute("total.duration_ms", processing_time * 1000)
@@ -175,6 +247,16 @@ async def query_with_voice_response(request: ChatRequest):
             if not request.query.strip():
                 raise HTTPException(status_code=400, detail="Query cannot be empty")
 
+        rewritten_query = request.query
+        time_context = qa_engine.build_time_context(request.query)
+        with tracer.start_as_current_span("rewrite_query") as span:
+            rewritten_query, time_context = qa_engine.rewrite_query_with_date_hint(
+                request.query, time_context=time_context
+            )
+            span.set_attribute("query.rewritten", rewritten_query[:200])
+            span.set_attribute("date_hint", time_context["date_hint"])
+            span.set_attribute("timezone", time_context["tz_name"])
+
         # Check if QA engine is available
         with tracer.start_as_current_span("check_availability"):
             if not qa_engine.is_available():
@@ -187,7 +269,7 @@ async def query_with_voice_response(request: ChatRequest):
         with tracer.start_as_current_span("retrieve_documents") as span:
             span.set_attribute("query.length", len(request.query))
             relevant_docs = vector_store.retrieve(
-                query=request.query, top_k=request.max_results or 5
+                query=rewritten_query, top_k=request.max_results or 5
             )
 
         if not relevant_docs:
@@ -221,13 +303,15 @@ async def query_with_voice_response(request: ChatRequest):
             )
 
         # Compute Egypt-local 'now' and pass to QA engine to ground relative dates
-        tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
-        now_local = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
-
         # Generate answer using QA engine with time context
         with tracer.start_as_current_span("generate_answer") as span:
             span.set_attribute("context.count", len(relevant_docs))
-            result = qa_engine.answer_question(request.query, relevant_docs, now_dt=now_local)
+            span.set_attribute("timezone", time_context["tz_name"])
+            result = qa_engine.answer_question(
+                request.query,
+                relevant_docs,
+                time_context=time_context,
+            )
 
         audio_data = None
         audio_size = None
@@ -302,3 +386,42 @@ async def test_query():
             "test_status": "failed",
             "error": str(e)
         }
+
+
+# ──────────────────────────────────────────────────────────────
+# Session management endpoints
+# ──────────────────────────────────────────────────────────────
+
+@router.post("/session/clear")
+async def clear_session_history(x_session_id: str = Header(...)):
+    """Clear conversation history for a session."""
+    with tracer.start_as_current_span("session.clear_history") as span:
+        span.set_attribute("session.id", x_session_id[:16] + "...")
+        deleted = short_term_memory.clear_session(x_session_id)
+        if deleted > 0:
+            return {"message": "Session history cleared", "session_id": x_session_id}
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+@router.post("/session/end")
+async def end_session(x_session_id: str = Header(...)):
+    """Delete a session completely (meta + memory)."""
+    with tracer.start_as_current_span("session.end") as span:
+        span.set_attribute("session.id", x_session_id[:16] + "...")
+        ok = session_manager.delete(x_session_id)
+        short_term_memory.clear_session(x_session_id)
+        if ok:
+            return {"message": "Session ended", "session_id": x_session_id}
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+@router.get("/session/history")
+async def get_session_history(x_session_id: str = Header(...), limit: int = 10):
+    """Get conversation history for a session (oldest-first)."""
+    with tracer.start_as_current_span("session.get_history") as span:
+        span.set_attribute("session.id", x_session_id[:16] + "...")
+        if not session_manager.is_valid(x_session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+        msgs = short_term_memory.get_messages(x_session_id, limit=limit)
+        history = [{"role": m.role, "content": m.content, "timestamp": m.timestamp} for m in msgs]
+        return {"session_id": x_session_id, "history": history, "total_messages": len(history)}

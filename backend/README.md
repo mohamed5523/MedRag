@@ -5,7 +5,7 @@ This is the FastAPI backend for the MedRAG (Medical Retrieval-Augmented Generati
 ## 🏗️ Architecture
 
 ```
-React Frontend ↔ FastAPI Backend ↔ ChromaDB + OpenAI
+React Frontend ↔ FastAPI Backend ↔ Weaviate (Hybrid Search) + OpenAI
 ```
 
 ## 🚀 Quick Start
@@ -80,7 +80,7 @@ The server will start at `http://localhost:8000`
 | `ELEVENLABS_API_KEY` | ElevenLabs API key for TTS | Required for TTS |
 | `ELEVENLABS_VOICE_ID` | Default ElevenLabs voice ID | Required for TTS |
 | `ELEVENLABS_MODEL` | ElevenLabs model | `eleven_flash_v2_5` |
-| `CHROMA_DB_PATH` | ChromaDB storage path | `./data/chroma_db` |
+| `WEAVIATE_URL` | Weaviate server URL | `http://localhost:8081` |
 | `UPLOAD_DIR` | Document upload directory | `./uploads` |
 | `API_HOST` | Server host | `0.0.0.0` |
 | `API_PORT` | Server port | `8000` |
@@ -149,7 +149,7 @@ const handleFileUpload = async (file: File) => {
 ## 📊 Features
 
 - ✅ **Document Processing**: Automatic text extraction from PDFs, Word docs, etc.
-- ✅ **Vector Search**: Semantic search using ChromaDB and HuggingFace embeddings
+- ✅ **Hybrid Search**: Advanced search using Weaviate with vector + keyword search (beta=0.3)
 - ✅ **AI Chat**: OpenAI-powered question answering
 - ✅ **Analytics**: Query logging and system monitoring
 - ✅ **CORS Support**: Ready for React frontend integration
@@ -166,7 +166,7 @@ backend/
 │   ├── core/         # Core RAG components
 │   ├── models/       # Pydantic models
 │   └── main.py       # FastAPI app
-├── data/             # ChromaDB storage
+├── data/             # Weaviate data (when running locally)
 ├── uploads/          # Uploaded documents
 ├── requirements.txt  # Dependencies
 └── run.py           # Server startup script
@@ -191,8 +191,9 @@ backend/
 3. **CORS errors from React**
    - Ensure your React dev server URL is in `CORS_ORIGINS`
 
-4. **ChromaDB permission errors**
-   - Ensure the `data/chroma_db` directory is writable
+4. **Weaviate connection errors**
+   - Ensure Weaviate service is running on port 8081
+   - Check WEAVIATE_URL environment variable
 
 ### Logs
 

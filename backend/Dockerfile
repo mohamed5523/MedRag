@@ -35,7 +35,7 @@ COPY run.py ./run.py
 COPY connect2supabase.py ./connect2supabase.py
 
 # Create data directories (mounted via volumes in compose)
-RUN mkdir -p /app/data/chroma_db /app/uploads
+RUN mkdir -p /app/data /app/uploads
 
 EXPOSE 8000
 
