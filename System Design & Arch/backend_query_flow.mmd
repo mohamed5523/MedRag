@@ -1,0 +1,29 @@
+%% MedRAG new query data flow
+%% Saved: backend_query_flow.mmd
+sequenceDiagram
+    participant User
+    participant FE as "Frontend (React/Vite)"
+    participant API as "FastAPI /api/chat/query"
+    participant Session as "SessionManager + ShortTermMemory"
+    participant Vector as "VectorStore client"
+    participant Weaviate as "Weaviate service"
+    participant QA as "QAEngine"
+    participant OpenAI as "OpenAI GPT"
+
+    User->>FE: Type query & submit
+    FE->>API: POST /api/chat/query (ChatRequest)
+    API->>Session: get_or_create(session_id)
+    Session-->>API: session_id
+    API->>Session: add_message(user), fetch history/context
+    API->>QA: build_time_context + rewrite query
+    API->>Vector: retrieve(rewritten_query, top_k)
+    Vector->>Weaviate: Hybrid search (embeddings + keyword)
+    Weaviate-->>Vector: Matching chunks + metadata
+    Vector-->>API: Relevant documents
+    API->>QA: answer_question(rewritten_query, docs, history)
+    QA->>OpenAI: chat.completions.create(...)
+    OpenAI-->>QA: Answer + token usage
+    QA-->>API: Answer, sources, metrics
+    API->>Session: add_message(assistant)
+    API-->>FE: ChatResponse (answer, sources, stats)
+    FE-->>User: Render response

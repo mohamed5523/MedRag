@@ -17,6 +17,8 @@ interface Message {
   hasAudio?: boolean;
 }
 
+const SESSION_STORAGE_KEY = "medragSessionId";
+
 const PatientDashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -41,6 +43,40 @@ const PatientDashboard = () => {
   const [isListening, setIsListening] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [canAutoplay, setCanAutoplay] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const generateSessionId = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `session_${crypto.randomUUID()}`;
+    }
+    return `session_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  };
+
+  const ensureSessionId = (): string | null => {
+    if (sessionId) {
+      return sessionId;
+    }
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    let existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!existing) {
+      existing = generateSessionId();
+      window.localStorage.setItem(SESSION_STORAGE_KEY, existing);
+    }
+    setSessionId(existing);
+    return existing;
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    let existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!existing) {
+      existing = generateSessionId();
+      window.localStorage.setItem(SESSION_STORAGE_KEY, existing);
+    }
+    setSessionId(existing);
+  }, []);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -103,10 +139,16 @@ const PatientDashboard = () => {
     setInputMessage("");
 
     try {
+      const activeSessionId = ensureSessionId();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (activeSessionId) {
+        headers["X-Session-Id"] = activeSessionId;
+      }
+
       // Use the new endpoint with voice support
       const resp = await fetch("/api/chat/query-with-voice", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ query: outgoing, max_results: 5 })
       });
 

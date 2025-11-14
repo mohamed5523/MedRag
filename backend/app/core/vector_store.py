@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 import weaviate
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -33,7 +33,7 @@ class VectorStore:
         self.embed_model = embed_model
         self.embeddings = HuggingFaceEmbeddings(model_name=embed_model)
         self.collection_name = "MedragCollection"
-        self.hybrid_beta = hybrid_beta
+        self.hybrid_beta = float(os.getenv("HYBRID_ALPHA", hybrid_beta))
 
         # Initialize Weaviate client
         self.client = weaviate.connect_to_local(
@@ -127,7 +127,7 @@ class VectorStore:
             logger.error(f"Error building index for {source}: {str(e)}")
             raise
     
-    def retrieve(self, query: str, top_k: int = 5) -> List[Document]:
+    def retrieve(self, query: str, top_k: int = 5, alpha_override: Optional[float] = None) -> List[Document]:
         """
         Retrieve top-k most relevant chunks from Weaviate using hybrid search with beta weighting.
         """
@@ -136,7 +136,8 @@ class VectorStore:
                 span.set_attribute("query.length", len(query))
                 span.set_attribute("top_k", top_k)
                 span.set_attribute("embed_model", self.embed_model)
-                span.set_attribute("hybrid_beta", self.hybrid_beta)
+                alpha = alpha_override if alpha_override is not None else self.hybrid_beta
+                span.set_attribute("hybrid_alpha", alpha)
                 span.add_event("search.started", {"timestamp": datetime.now().isoformat()})
 
                 # Use direct Weaviate collection for full control over hybrid search
@@ -151,7 +152,7 @@ class VectorStore:
                 # beta = 0.3 means 30% weight on vector search, 70% on keyword search
                 response = collection.query.hybrid(
                     query=query_text,
-                    alpha=self.hybrid_beta,
+                    alpha=alpha,
                     limit=top_k,
                     vector=query_vector,
                     return_metadata=MetadataQuery(score=True, explain_score=True),

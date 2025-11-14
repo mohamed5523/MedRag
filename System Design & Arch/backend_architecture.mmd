@@ -1,0 +1,67 @@
+%% MedRAG backend component map
+%% Saved: backend_architecture.mmd
+flowchart TB
+    %% Clients
+    subgraph Clients
+        FE["Frontend (React/Vite)"]
+        WAClient["WhatsApp Business"]
+    end
+
+    %% Backend focus
+    subgraph Backend["heal-query-hub/backend/app (FastAPI)"]
+        MAIN["app.main\nFastAPI app + lifespan"]
+        subgraph Routers["app/api"]
+            DOCS["documents.py\nUploads & indexing"]
+            CHAT["chat.py\nChat / RAG"]
+            ASR["asr.py\nSpeech-to-text"]
+            TTS["tts.py\nText-to-speech"]
+            ANALYTICS["analytics.py\nUsage stats"]
+            WHATSAPP["whatsapp.py\nWebhook relay"]
+        end
+
+        subgraph Core["app/core"]
+            DP["document_processor.py"]
+            QA["qa_engine.py"]
+            VS["vector_store.py"]
+            MEM["conversation_memory.py"]
+            SESS["session_manager.py"]
+            REDIS_CLIENT["redis_client.py"]
+            TTS_CORE["text_to_speech.py"]
+        end
+
+        MODELS["app/models/schemas.py"]
+        OBS["app/observability/phoenix.py"]
+        SUPA_JOB["app/services/supabase_reindexer.py"]
+    end
+
+    %% Infrastructure (docker-compose)
+    subgraph Infra["docker-compose services"]
+        REDIS[(Redis 7)]
+        WEAVIATE[(Weaviate 1.28)]
+        PHOENIX[(Phoenix OTLP)]
+        STORAGE[(uploads/ volume)]
+    end
+
+    %% Client calls
+    FE -->|REST /api/*| MAIN
+    WAClient -->|/webhook/whatsapp| WHATSAPP
+
+    %% Router wiring
+    MAIN --> Routers
+    DOCS --> DP --> VS --> WEAVIATE
+    DOCS --> STORAGE
+    CHAT --> QA --> VS
+    CHAT --> MEM --> REDIS_CLIENT --> REDIS
+    CHAT --> MODELS
+    ASR --> CHAT
+    TTS --> TTS_CORE --> FE
+    TTS --> MODELS
+    ANALYTICS --> MODELS
+    WHATSAPP --> CHAT
+
+    %% Background + observability
+    MAIN --> OBS --> PHOENIX
+    MAIN --> SUPA_JOB --> VS
+    SUPA_JOB --> WEAVIATE
+    VS --> PHOENIX
+    REDIS_CLIENT --> PHOENIX

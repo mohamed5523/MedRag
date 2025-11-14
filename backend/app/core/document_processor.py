@@ -1,9 +1,9 @@
+import logging
 from pathlib import Path
-from typing import Optional
+
 import markdown
 from docx import Document as DocxDocument
 from pypdf import PdfReader
-import logging
 
 logger = logging.getLogger(__name__)
 
