@@ -76,7 +76,12 @@ The server will start at `http://localhost:8000`
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key for LLM | Required |
+| `OPENAI_API_KEY` | OpenAI API key for LLM / embeddings | Required (if using OpenAI) |
+| `EMBEDDING_PROVIDER` | Embedding backend (`huggingface`, `cohere`, `openai`) | `huggingface` |
+| `HUGGINGFACE_EMBED_MODEL` | HuggingFace embedding model name | `intfloat/multilingual-e5-base` |
+| `COHERE_API_KEY` | Cohere API key (only if using Cohere embeddings) | Optional |
+| `COHERE_EMBED_MODEL` | Cohere embedding model name | `embed-multilingual-v3.0` |
+| `OPENAI_EMBED_MODEL` | OpenAI embedding model name | `text-embedding-3-large` |
 | `ELEVENLABS_API_KEY` | ElevenLabs API key for TTS | Required for TTS |
 | `ELEVENLABS_VOICE_ID` | Default ElevenLabs voice ID | Required for TTS |
 | `ELEVENLABS_MODEL` | ElevenLabs model | `eleven_flash_v2_5` |

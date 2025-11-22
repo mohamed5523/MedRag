@@ -1,10 +1,9 @@
 import logging
 import os
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional, Tuple
 
 import weaviate
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_weaviate import WeaviateVectorStore
 from opentelemetry import trace
@@ -24,14 +23,14 @@ tracer = trace.get_tracer("medrag.vector_store")
 
 class VectorStore:
     """
-    Manages document indexing and retrieval using Weaviate with hybrid search and HuggingFace embeddings.
+    Manages document indexing and retrieval using Weaviate with hybrid search and pluggable embeddings.
     """
 
-    def __init__(self, weaviate_url: str = None, embed_model: str = "intfloat/multilingual-e5-base", hybrid_beta: float = 0.3):
+    def __init__(self, weaviate_url: str = None, embed_model: str = "intfloat/multilingual-e5-base", hybrid_beta: float = 0.2):
         # Allow override via env var; default to http://localhost:8081
         self.weaviate_url = os.getenv("WEAVIATE_URL") or weaviate_url or "http://localhost:8081"
-        self.embed_model = embed_model
-        self.embeddings = HuggingFaceEmbeddings(model_name=embed_model)
+        self.embed_provider = os.getenv("EMBEDDING_PROVIDER", "huggingface").strip().lower() or "huggingface"
+        self.embeddings, self.embed_model = self._init_embeddings(embed_model)
         self.collection_name = "MedragCollection"
         self.hybrid_beta = float(os.getenv("HYBRID_ALPHA", hybrid_beta))
 
@@ -50,6 +49,52 @@ class VectorStore:
 
         # Ensure collection exists
         self._ensure_collection()
+
+    def _init_embeddings(self, default_model: str) -> Tuple[Any, str]:
+        """
+        Initialize the embedding model based on EMBEDDING_PROVIDER env var.
+        Returns (embedding_instance, model_name).
+        """
+        provider = self.embed_provider
+        if provider == "cohere":
+            try:
+                from langchain_cohere import CohereEmbeddings
+            except Exception as exc:  # pragma: no cover
+                raise ImportError(
+                    "EMBEDDING_PROVIDER=cohere requires langchain-cohere. Install via `uv add langchain-cohere`."
+                ) from exc
+
+            api_key = os.getenv("COHERE_API_KEY")
+            if not api_key:
+                raise ValueError("COHERE_API_KEY must be set when EMBEDDING_PROVIDER=cohere")
+            model_name = os.getenv("COHERE_EMBED_MODEL", "embed-multilingual-v3.0")
+            logger.info("Using Cohere embeddings (%s)", model_name)
+            embeddings = CohereEmbeddings(model=model_name, cohere_api_key=api_key)
+            return embeddings, model_name
+
+        if provider == "openai":
+            try:
+                from langchain_openai import OpenAIEmbeddings
+            except Exception as exc:  # pragma: no cover
+                raise ImportError(
+                    "EMBEDDING_PROVIDER=openai requires langchain-openai. Install via `uv add langchain-openai`."
+                ) from exc
+
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY must be set when EMBEDDING_PROVIDER=openai")
+            model_name = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+            logger.info("Using OpenAI embeddings (%s)", model_name)
+            embeddings = OpenAIEmbeddings(api_key=api_key, model=model_name)
+            return embeddings, model_name
+
+        # Default to HuggingFace
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        model_name = os.getenv("HUGGINGFACE_EMBED_MODEL", default_model)
+        logger.info("Using HuggingFace embeddings (%s)", model_name)
+        embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        return embeddings, model_name
 
     def _ensure_collection(self):
         """Ensure the Weaviate collection exists with proper configuration."""
@@ -136,6 +181,7 @@ class VectorStore:
                 span.set_attribute("query.length", len(query))
                 span.set_attribute("top_k", top_k)
                 span.set_attribute("embed_model", self.embed_model)
+                span.set_attribute("embed.provider", self.embed_provider)
                 alpha = alpha_override if alpha_override is not None else self.hybrid_beta
                 span.set_attribute("hybrid_alpha", alpha)
                 span.add_event("search.started", {"timestamp": datetime.now().isoformat()})
@@ -202,6 +248,7 @@ class VectorStore:
                 return {
                     "total_documents": response.total_count,
                     "collection_name": self.collection_name,
+                    "embed_provider": self.embed_provider,
                     "embed_model": self.embed_model,
                     "hybrid_beta": self.hybrid_beta
                 }
@@ -211,6 +258,7 @@ class VectorStore:
             return {
                 "total_documents": 0,
                 "collection_name": self.collection_name,
+                "embed_provider": self.embed_provider,
                 "embed_model": self.embed_model,
                 "hybrid_beta": self.hybrid_beta,
                 "error": str(e)
