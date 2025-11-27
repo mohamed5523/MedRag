@@ -297,6 +297,159 @@ class QAEngine:
                 "error": str(e)
             }
     
+    def answer_with_hybrid_context(
+        self,
+        question: str,
+        mcp_context: str,
+        rag_contexts: List[Document],
+        now_dt: datetime | None = None,
+        time_context: Dict[str, Any] | None = None,
+        chat_history: List[Dict[str, str]] | None = None,
+    ) -> dict:
+        """
+        Generate an answer using both MCP structured data and RAG knowledge base contexts.
+        
+        Args:
+            question: User's question
+            mcp_context: Structured data from MCP (schedules, prices, etc.)
+            rag_contexts: Documents from RAG retrieval for enrichment
+            now_dt: Current datetime
+            time_context: Time context dictionary
+            chat_history: Previous conversation turns
+            
+        Returns:
+            Dictionary with answer, sources, and metadata
+        """
+        if not self.client:
+            return {
+                "answer": "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.",
+                "sources": [],
+                "context_count": 0,
+                "model_used": self.model,
+                "tokens_used": None,
+                "error": "API key not configured"
+            }
+        
+        try:
+            with tracer.start_as_current_span("prepare_hybrid_context") as span:
+                # Prepare RAG context
+                rag_texts = [doc.page_content for doc in rag_contexts]
+                sources = [doc.metadata.get("source", "Unknown") for doc in rag_contexts]
+                rag_context_str = "\n\n".join([f"Document {i+1}: {text}" for i, text in enumerate(rag_texts)])
+                
+                ctx = time_context or self.build_time_context(question, now_dt)
+                is_arabic = ctx["is_arabic"]
+                
+                span.set_attribute("context.mcp_length", len(mcp_context))
+                span.set_attribute("context.rag_count", len(rag_contexts))
+                span.set_attribute("context.is_hybrid", True)
+            
+            # Create system prompt for hybrid mode
+            if is_arabic:
+                system_prompt = (
+                    "إنتِ مُساعِدَة طِبِّيَّة ذَكِيَّة اسمِك كيميت، شَغَّالَة في مُسْتَشْفى مِصري. "
+                    "دَورِك إنِّك تِسَاعِدِي المَرضَى وتِرُدِّي على أَسْئِلِتْهُم بالعَامِّيَّة المِصريَّة بِطَريقَة وَاضِحَة، سَهْلَة، ومُهَذَّبَة. "
+                    "\n"
+                    "## مصادر المعلومات:\n"
+                    "عندك نوعين من المعلومات:\n"
+                    "1. **البيانات الرسمية من نظام العيادات** (مواعيد، أسعار، أطباء) - دي أولوية ودقيقة 100%\n"
+                    "2. **المعلومات الطبية العامة** من قاعدة المعرفة - استخدميها لإثراء الإجابة بمعلومات عن التخصصات والخدمات\n"
+                    "\n"
+                    "قَوَاعِد الإِخْرَاج (إِلزَامِيَّة): "
+                    "١. اسْتَخْدِمِي العَامِّيَّة المِصريَّة الوَاضِحَة وَالسَهْلَة. "
+                    "٢. شَكِّلِي الكَلِمَات المُهِمَّة بالطَريقَة اللي بتُوَضِّح النُطق المِصري. "
+                    "٣. لَوِ البَيَانات الرَسْمِيَّة مَوْجُودَة، اعْتَمِدِي عَلَيْهَا الأَوَّل. "
+                    "٤. أَضِيفِي مَعْلُومَات طِبِّيَّة مِنَ المُسْتَنْدَات لَوْ كَانَتْ مُفِيدَة. "
+                    "٥. رُدِّي بِطَريقَة طَبِيعِيَّة وَمُريحَة للمَريض."
+                )
+                
+                user_message = f"""
+السؤال: {question}
+
+## البيانات الرسمية من نظام العيادات:
+{mcp_context}
+
+## معلومات طبية إضافية من قاعدة المعرفة:
+{rag_context_str if rag_texts else "لا توجد معلومات إضافية"}
+
+استخدمي البيانات الرسمية كأساس للإجابة، وأضيفي معلومات طبية من قاعدة المعرفة لو كانت مفيدة للمريض.
+تذكّري استخدام العامية المصرية والتشكيل على الكلمات المهمة.
+"""
+            else:
+                system_prompt = (
+                    "You are Kemit, an intelligent medical assistant working in an Egyptian hospital. "
+                    "Your role is to help patients and answer their questions clearly and professionally. "
+                    "\n"
+                    "## Information Sources:\n"
+                    "You have two types of information:\n"
+                    "1. **Official clinic system data** (schedules, prices, doctors) - This is priority and 100% accurate\n"
+                    "2. **General medical information** from knowledge base - Use this to enrich answers with medical context\n"
+                    "\n"
+                    "Always prioritize official data and supplement with medical knowledge when helpful."
+                )
+                
+                user_message = f"""
+Question: {question}
+
+## Official Clinic System Data:
+{mcp_context}
+
+## Additional Medical Information:
+{rag_context_str if rag_texts else "No additional information available"}
+
+Use the official data as the foundation for your answer, and add medical context when helpful.
+"""
+            
+            # Build conversation
+            messages: List[Dict[str, str]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": ctx["time_context_message"]},
+            ]
+            
+            if chat_history:
+                for msg in chat_history:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if role in ("user", "assistant") and content:
+                        messages.append({"role": role, "content": content})
+            
+            messages.append({"role": "user", "content": user_message})
+            
+            # Generate response
+            with tracer.start_as_current_span("generate_hybrid_with_openai") as span:
+                span.set_attribute("model", self.model)
+                span.set_attribute("mode", "hybrid")
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=600,  # Slightly more for hybrid responses
+                    top_p=0.9
+                )
+            
+            answer = response.choices[0].message.content.strip()
+            unique_sources = list(set(sources + ["MCP Clinic System"]))
+            
+            return {
+                "answer": answer,
+                "sources": unique_sources,
+                "context_count": len(rag_contexts) + 1,  # +1 for MCP
+                "model_used": self.model,
+                "tokens_used": response.usage.total_tokens if response.usage else None,
+                "mode": "hybrid"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating hybrid answer: {str(e)}")
+            return {
+                "answer": f"I encountered an error while processing your question: {str(e)}",
+                "sources": [],
+                "context_count": 0,
+                "model_used": self.model,
+                "tokens_used": None,
+                "error": str(e)
+            }
+    
     def is_available(self) -> bool:
         """Check if the QA engine is properly configured and available."""
         return self.client is not None

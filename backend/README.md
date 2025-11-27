@@ -48,6 +48,14 @@ The server will start at `http://localhost:8000`
   - TTS Voices: <http://localhost:8000/api/tts/voices>
   - TTS Audio (example): <http://localhost:8000/api/tts/audio?text=Hello>
 
+### 5. Run backend + MCP via Docker Compose
+
+```bash
+docker compose up mcp-server backend
+```
+
+This brings up the FastAPI backend and the MCP clinic server on the shared `medrag` network. The backend automatically points to `http://mcp-server:8000` internally, while the MCP server is published on `http://localhost:8020` for direct debugging.
+
 ## 📋 API Endpoints
 
 ### Documents
@@ -60,6 +68,7 @@ The server will start at `http://localhost:8000`
 ### Chat
 
 - `POST /api/chat/query` - Query the RAG system
+- `POST /api/chat/query-with-voice` - Auto-routed voice answers with MCP + TTS
 - `GET /api/chat/health` - Check chat system health
 - `POST /api/chat/test` - Test the chat functionality
 
@@ -69,6 +78,19 @@ The server will start at `http://localhost:8000`
 - `GET /api/analytics/queries` - Get query logs
 - `GET /api/analytics/health` - Get system health
 - `GET /api/analytics/stats` - Get detailed statistics
+
+## 🔁 MCP Routing for Voice Queries
+
+The `/api/chat/query-with-voice` endpoint now inspects every request and routes it to the clinic MCP server when appropriate:
+
+- The `state_manager` extracts intent/entities. Intents such as `ask_price`, `book_appointment`, `check_availability`, and `list_doctors` are mapped to MCP tools. Any hospital-related query is forced back to the existing RAG flow.
+- A deterministic router (`app/core/intent_router.py`) emits a `RouteDecision` that the new `ClinicWorkflowService` executes. The workflow can invoke multiple MCP tools (e.g., provider list → resolve IDs → fetch schedule) before summarising the JSON output with the standard `QAEngine`.
+- All intermediate tool calls are traced in Phoenix so you can correlate MCP activity with user conversations.
+
+> **Tip:** The reference MCP server lives under `backend/MCP/`. Start it (or point the backend to your deployed instance) before issuing clinic-specific voice queries so the workflow can resolve doctors, clinics, and prices.
+> When using `docker compose up mcp-server backend`, the MCP server automatically runs as part of the stack.
+
+Set the `MCP_*` environment variables described below to match your deployment. You can override the individual tool URLs (`MCP_PROVIDER_LIST_URL`, etc.) if the server exposes custom routes.
 
 ## 🔧 Configuration
 
@@ -90,6 +112,14 @@ The server will start at `http://localhost:8000`
 | `API_HOST` | Server host | `0.0.0.0` |
 | `API_PORT` | Server port | `8000` |
 | `LOG_LEVEL` | Logging level | `INFO` |
+| `MCP_BASE_URL` | Base URL for the clinic MCP server | `http://localhost:8020` |
+| `MCP_PROVIDER_LIST_PATH` | Relative path for the provider list tool | `/providers` |
+| `MCP_PROVIDER_SCHEDULE_PATH` | Relative path for the provider schedule tool | `/providers/schedule` |
+| `MCP_SERVICE_PRICE_PATH` | Relative path for the pricing tool | `/providers/services/pricing` |
+| `MCP_API_KEY` | Optional bearer token passed to the MCP server | Optional |
+| `MCP_BASIC_AUTH_USERNAME`/`MCP_BASIC_AUTH_PASSWORD` | Optional HTTP basic auth credentials | Optional |
+| `MCP_REQUEST_TIMEOUT_SECONDS` | Read timeout for MCP HTTP calls | `20` |
+| `MCP_CONNECT_TIMEOUT_SECONDS` | Connection timeout for MCP HTTP calls | `5` |
 
 ### Supported Document Types
 
@@ -114,6 +144,13 @@ curl -X POST "http://localhost:8000/api/documents/upload" \
 curl -X POST "http://localhost:8000/api/chat/query" \
      -H "Content-Type: application/json" \
      -d '{"query": "What medical information is available?"}'
+```
+
+### Unit Tests
+
+```bash
+cd backend
+pytest tests
 ```
 
 ## 🔗 Frontend Integration

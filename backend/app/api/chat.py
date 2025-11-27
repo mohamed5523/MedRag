@@ -9,11 +9,15 @@ from fastapi import APIRouter, Header, HTTPException
 from opentelemetry import trace
 
 from ..core.conversation_memory import short_term_memory
+from ..core.intent_router import RouteMode, route_conversation
 from ..core.qa_engine import QAEngine
 from ..core.session_manager import session_manager
+from ..core.state_manager import state_manager
 from ..core.text_to_speech import TextToSpeech
 from ..core.vector_store import VectorStore
+from ..integrations.mcp_client import MCPClientError
 from ..models.schemas import ChatRequest, ChatResponse, ChatResponseWithAudio
+from ..services.clinic_workflow import ClinicWorkflowService, MCPWorkflowError
 
 logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
 
@@ -32,6 +36,23 @@ try:
 except Exception as e:
     logger.warning(f"TTS service not available: {e}")
     tts_service = None
+
+clinic_workflow = ClinicWorkflowService()
+
+
+async def _maybe_generate_audio(text: str) -> tuple[Optional[str], Optional[int], bool]:
+    """Synthesize audio if a TTS backend is available."""
+    if not tts_service or not text:
+        return None, None, False
+
+    with tracer.start_as_current_span("synthesize_tts"):
+        try:
+            audio_bytes = await tts_service.synthesize(text)
+            audio_data = base64.b64encode(audio_bytes).decode("utf-8")
+            return audio_data, len(audio_bytes), True
+        except Exception as exc:  # pragma: no cover - network/service failure
+            logger.warning(f"TTS generation failed: {exc}")
+            return None, None, False
 
 @router.post("/query", response_model=ChatResponse)
 async def query_documents(request: ChatRequest, x_session_id: Optional[str] = Header(None)):
@@ -84,15 +105,42 @@ async def query_documents(request: ChatRequest, x_session_id: Optional[str] = He
                     )
             except Exception as _log_err:
                 logger.debug("Unable to log history preview: %s", _log_err)
+            
+            # Extract and update conversation state
+            previous_state = short_term_memory.get_state(session_id)
+            
+            # Prepare history for state extraction (reverse order to be chronological if needed, but the extractor expects list of dicts)
+            # ShortTermMemoryStore.get_messages returns chronological order (oldest first)?
+            # Let's check: get_messages says "Get messages oldest-first"
+            # So 'history' is oldest -> newest. That's good.
+            history_dicts = [{"role": m.role, "content": m.content} for m in history]
+            
+            with tracer.start_as_current_span("extract_state") as span:
+                new_state = state_manager.extract_state(request.query, history_dicts, previous_state)
+
+                short_term_memory.save_state(session_id, new_state)
+                
+                rewritten_query_from_state = state_manager.rewrite_query(new_state)
+                
+                span.set_attribute("state.intent", new_state.intent)
+                span.set_attribute("state.entities.doctor", str(new_state.entities.doctor))
+                span.set_attribute("query.rewritten_state", rewritten_query_from_state)
+                
+                logger.info(f"🧠 State Update: Intent={new_state.intent}, Entities={new_state.entities}")
+
             # Rewrite query to include explicit date hint for retrieval
-            query_with_context = request.query
-            retrieval_query = request.query
+            # We use the state-rewritten query as the base for the retrieval query
+            query_with_context = rewritten_query_from_state
+            retrieval_query = rewritten_query_from_state
             time_context = qa_engine.build_time_context(request.query)
+            
             with tracer.start_as_current_span("rewrite_query") as span:
                 # If we have context, prepend it in a compact form for retrieval and generation
-                if history_ctx:
-                    query_with_context = f"{history_ctx}\n\nCurrent user message: {request.query}"
-                    retrieval_query = query_with_context
+                # Note: With state management, we might rely less on raw history concatenation,
+                # but keeping it for date context or other subtleties is fine.
+                # However, mixing the "state rewritten" query with raw history might be confusing.
+                # Let's just use the state rewritten query + date hint for retrieval.
+                
                 rewritten_query, time_context = qa_engine.rewrite_query_with_date_hint(
                     query_with_context, time_context=time_context
                 )
@@ -294,14 +342,36 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
             except Exception as _log_err:
                 logger.debug("Unable to log voice history preview: %s", _log_err)
 
+            # Extract and update conversation state (Voice)
+            previous_state = short_term_memory.get_state(session_id)
+            history_dicts = [{"role": m.role, "content": m.content} for m in history]
+
+            history_payload = [
+                {"role": m.role, "content": m.content}
+                for m in history
+                if m.content
+            ]
+            
+            with tracer.start_as_current_span("extract_state") as span:
+                new_state = state_manager.extract_state(request.query, history_dicts, previous_state)
+
+                short_term_memory.save_state(session_id, new_state)
+                
+                rewritten_query_from_state = state_manager.rewrite_query(new_state)
+                
+                span.set_attribute("state.intent", new_state.intent)
+                span.set_attribute("query.rewritten_state", rewritten_query_from_state)
+
+            decision = route_conversation(new_state, request.query)
+            root_span.set_attribute("routing.intent", decision.intent)
+            root_span.set_attribute("routing.mode", decision.mode.value)
+
             # Build time context and optionally prepend conversation history
-            query_with_context = request.query
-            retrieval_query = request.query
+            query_with_context = rewritten_query_from_state
+            retrieval_query = rewritten_query_from_state
             time_context = qa_engine.build_time_context(request.query)
+            
             with tracer.start_as_current_span("rewrite_query") as span:
-                if history_ctx:
-                    query_with_context = f"{history_ctx}\n\nCurrent user message: {request.query}"
-                    retrieval_query = query_with_context
                 rewritten_query, time_context = qa_engine.rewrite_query_with_date_hint(
                     query_with_context, time_context=time_context
                 )
@@ -339,6 +409,112 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                     )
                 span.add_event("availability.check.passed")
 
+            if decision.mode == RouteMode.MCP:
+                try:
+                    workflow_result = await clinic_workflow.run(
+                        decision=decision,
+                        state=new_state,
+                        question=request.query,
+                        qa_engine=qa_engine,
+                        chat_history=history_payload,
+                    )
+                except (MCPWorkflowError, MCPClientError) as workflow_error:
+                    fallback_reason = getattr(workflow_error, "reason", "mcp_client_error")
+                    root_span.add_event(
+                        "routing.mcp.failed",
+                        {
+                            "reason": fallback_reason,
+                            "message": str(workflow_error),
+                        },
+                    )
+                    root_span.set_attribute("routing.mode", f"{RouteMode.RAG.value}.fallback")
+                    logger.info("Falling back to RAG after MCP failure: %s", workflow_error)
+                else:
+                    # MCP succeeded - check if we should enrich with RAG
+                    root_span.add_event(
+                        "routing.mcp.success",
+                        {
+                            "tool_count": len(workflow_result.tool_audit),
+                            "should_enrich": decision.should_enrich_with_rag,
+                        },
+                    )
+                    
+                    if decision.should_enrich_with_rag:
+                        # Hybrid mode: Enrich MCP result with RAG context
+                        logger.info("Enriching MCP result with RAG context")
+                        root_span.set_attribute("routing.mode", "hybrid")
+                        
+                        with tracer.start_as_current_span("retrieve_enrichment_docs") as span:
+                            span.set_attribute("query.length", len(request.query))
+                            span.set_attribute("top_k", 3)  # Fewer docs for enrichment
+                            
+                            alpha_override = ARABIC_HYBRID_ALPHA if time_context.get("is_arabic") else None
+                            enrichment_docs = vector_store.retrieve(
+                                query=retrieval_query,
+                                top_k=3,  # Just a few docs for context
+                                alpha_override=alpha_override
+                            )
+                            
+                            span.set_attribute("results.count", len(enrichment_docs))
+                            logger.info(f"Retrieved {len(enrichment_docs)} enrichment documents")
+                        
+                        # Generate hybrid answer
+                        with tracer.start_as_current_span("generate_hybrid_answer") as span:
+                            span.set_attribute("mcp_context_length", len(workflow_result.qa_response.get("answer", "")))
+                            span.set_attribute("rag_docs_count", len(enrichment_docs))
+                            
+                            # Use the MCP answer as structured context
+                            mcp_context = workflow_result.qa_response.get("answer", "")
+                            
+                            hybrid_result = qa_engine.answer_with_hybrid_context(
+                                question=request.query,
+                                mcp_context=mcp_context,
+                                rag_contexts=enrichment_docs,
+                                time_context=time_context,
+                                chat_history=history_payload,
+                            )
+                            
+                            span.set_attribute("answer_length", len(hybrid_result.get("answer", "")))
+                            span.set_attribute("tokens_used", hybrid_result.get("tokens_used", 0))
+                        
+                        result_payload = hybrid_result
+                    else:
+                        # Pure MCP mode - use MCP result directly
+                        root_span.set_attribute("routing.mode", "mcp_only")
+                        result_payload = workflow_result.qa_response
+                    
+                    short_term_memory.add_message(session_id, "assistant", result_payload.get("answer", ""))
+                    audio_data, audio_size, has_audio = await _maybe_generate_audio(result_payload.get("answer", ""))
+                    processing_time = time.time() - start_time
+                    root_span.set_attribute("total.duration_ms", processing_time * 1000)
+                    root_span.set_attribute("response.answer_length", len(result_payload.get("answer", "")))
+                    root_span.set_attribute("response.has_audio", has_audio)
+                    if audio_size is not None:
+                        root_span.set_attribute("response.audio_size", audio_size)
+                    
+                    root_span.add_event(
+                        "request.completed",
+                        {
+                            "duration_ms": processing_time * 1000,
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                    )
+                    try:
+                        current_span = trace.get_current_span()
+                        if current_span:
+                            provider = trace.get_tracer_provider()
+                            if hasattr(provider, "force_flush"):
+                                provider.force_flush(timeout_millis=1000)
+                    except Exception as flush_error:
+                        logger.debug(f"Could not force flush voice spans: {flush_error}")
+
+                    return ChatResponseWithAudio(
+                        **result_payload,
+                        audio_data=audio_data,
+                        audio_size=audio_size,
+                        has_audio=has_audio,
+                    )
+
             # Retrieve relevant documents
             retrieve_start = time.time()
             with tracer.start_as_current_span("retrieve_documents") as span:
@@ -373,19 +549,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
 
                 short_term_memory.add_message(session_id, "assistant", response_text)
 
-                audio_data = None
-                audio_size = None
-                has_audio = False
-
-                if tts_service:
-                    with tracer.start_as_current_span("synthesize_tts"):
-                        try:
-                            audio_bytes = await tts_service.synthesize(response_text)
-                            audio_data = base64.b64encode(audio_bytes).decode("utf-8")
-                            audio_size = len(audio_bytes)
-                            has_audio = True
-                        except Exception as e:
-                            logger.warning(f"TTS generation failed: {e}")
+                audio_data, audio_size, has_audio = await _maybe_generate_audio(response_text)
 
                 processing_time = time.time() - start_time
                 root_span.set_attribute("total.duration_ms", processing_time * 1000)
@@ -404,13 +568,6 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                     audio_size=audio_size,
                     has_audio=has_audio,
                 )
-
-            # Prepare chat history for LLM
-            history_payload = [
-                {"role": m.role, "content": m.content}
-                for m in history
-                if m.content
-            ]
 
             # Generate answer with QA engine
             answer_start = time.time()
@@ -441,19 +598,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
             short_term_memory.add_message(session_id, "assistant", result.get("answer", ""))
 
             # Synthesize audio if possible
-            audio_data = None
-            audio_size = None
-            has_audio = False
-
-            if tts_service and result.get("answer"):
-                with tracer.start_as_current_span("synthesize_tts"):
-                    try:
-                        audio_bytes = await tts_service.synthesize(result["answer"])
-                        audio_data = base64.b64encode(audio_bytes).decode("utf-8")
-                        audio_size = len(audio_bytes)
-                        has_audio = True
-                    except Exception as e:
-                        logger.warning(f"TTS generation failed: {e}")
+            audio_data, audio_size, has_audio = await _maybe_generate_audio(result.get("answer", ""))
 
             processing_time = time.time() - start_time
             root_span.set_attribute("total.duration_ms", processing_time * 1000)

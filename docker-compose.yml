@@ -37,6 +37,7 @@ services:
       - WEAVIATE_URL=http://weaviate:8080
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MCP_BASE_URL=http://mcp-server:8000
     volumes:
       - ./backend/uploads:/app/uploads
     ports:
@@ -50,12 +51,36 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mcp-server:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"] # test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 120s
+
+  mcp-server:
+    build:
+      context: ./backend/MCP
+    env_file:
+      - ./backend/.env
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8000
+      - PYTHONUNBUFFERED=1
+    command: ["python", "clinic_server.py"]
+    ports:
+      - "8020:8000"
+    networks:
+      - medrag
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/providers"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine

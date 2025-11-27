@@ -1,0 +1,24 @@
+services:
+  clinic-mcp:
+    build: .
+    container_name: clinic-mcp
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # ensures outgoing requests work
+      REQUEST_TIMEOUT: 30
+      MAX_RETRIES: 3
+      REQUEST_RETRY_BACKOFF: 0.5
+    networks:
+      - clinic-net
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/providers"]
+      interval: 15s
+      retries: 3
+      timeout: 5s
+
+networks:
+  clinic-net:
+    driver: bridge

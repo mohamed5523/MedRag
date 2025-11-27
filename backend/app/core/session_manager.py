@@ -43,7 +43,7 @@ class SessionManager:
             redis_client.set(key, {"updated_at": time.time()}, ex=self.session_ttl)
             logger.debug(f"🔄 Session refreshed: {provided_id[:16]}...")
             return provided_id
-        return self.create_session()
+        return self.create_session(session_id=provided_id)
     
     def delete(self, session_id: str) -> bool:
         redis_client.delete(f"session:meta:{session_id}")

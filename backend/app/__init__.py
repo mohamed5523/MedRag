@@ -1,19 +1,27 @@
-# FastAPI backend for MedRAG integration
-# Re-export Redis components for easy importing
-from .core.conversation_memory import (
-    MemoryMessage,
-    ShortTermMemoryStore,
-    short_term_memory,
-)
-from .core.redis_client import RedisClient, redis_client
-from .core.session_manager import SessionManager, session_manager
+"""MedRAG backend package."""
 
-__all__ = [
-    "RedisClient",
-    "redis_client",
-    "SessionManager", 
-    "session_manager",
-    "ShortTermMemoryStore",
-    "short_term_memory",
-    "MemoryMessage",
-]
+from importlib import import_module
+from typing import Any
+
+_EXPORTS = {
+    "RedisClient": (".core.redis_client", "RedisClient"),
+    "redis_client": (".core.redis_client", "redis_client"),
+    "SessionManager": (".core.session_manager", "SessionManager"),
+    "session_manager": (".core.session_manager", "session_manager"),
+    "ShortTermMemoryStore": (".core.conversation_memory", "ShortTermMemoryStore"),
+    "short_term_memory": (".core.conversation_memory", "short_term_memory"),
+    "MemoryMessage": (".core.conversation_memory", "MemoryMessage"),
+}
+
+__all__ = sorted(_EXPORTS.keys())
+
+
+def __getattr__(name: str) -> Any:
+    try:
+        module_path, attr = _EXPORTS[name]
+    except KeyError as exc:  # pragma: no cover - default AttributeError path
+        raise AttributeError(f"module 'app' has no attribute '{name}'") from exc
+    module = import_module(module_path, package=__name__)
+    value = getattr(module, attr)
+    globals()[name] = value
+    return value

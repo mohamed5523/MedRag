@@ -8,6 +8,7 @@ from typing import List, Literal, Optional
 from opentelemetry import trace
 
 from .redis_client import redis_client
+from .state_manager import ConversationState
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.conversation_memory")
@@ -65,6 +66,9 @@ class ShortTermMemoryStore:
 
     def _k_meta(self, session_id: str) -> str:
         return f"{self.namespace}:s:{session_id}:meta"
+        
+    def _k_state(self, session_id: str) -> str:
+        return f"{self.namespace}:s:{session_id}:state"
 
     # Core operations
     def add_message(
@@ -203,7 +207,8 @@ class ShortTermMemoryStore:
             try:
                 deleted = redis_client.delete(
                     self._k_messages(session_id),
-                    self._k_meta(session_id)
+                    self._k_meta(session_id),
+                    self._k_state(session_id)
                 )
                 logger.info(f"🗑️ Cleared session {session_id[:16]}... ({deleted} keys)")
                 return deleted
@@ -211,6 +216,30 @@ class ShortTermMemoryStore:
                 logger.error(f"Redis delete error for session {session_id[:16]}...: {e}")
                 span.record_exception(e)
                 return 0
+
+    def save_state(self, session_id: str, state: ConversationState) -> None:
+        """Save the current conversation state."""
+        k_state = self._k_state(session_id)
+        try:
+            # Save state and refresh TTL
+            pipe = self.redis.pipeline(transaction=True)
+            pipe.set(k_state, state.model_dump_json())
+            pipe.expire(k_state, self.session_ttl_seconds)
+            pipe.execute()
+        except Exception as e:
+            logger.error(f"Redis error saving state for session {session_id[:16]}...: {e}")
+            
+    def get_state(self, session_id: str) -> Optional[ConversationState]:
+        """Retrieve the current conversation state."""
+        k_state = self._k_state(session_id)
+        try:
+            raw = redis_client.get(k_state)
+            if raw:
+                return ConversationState.model_validate_json(raw)
+            return None
+        except Exception as e:
+            logger.error(f"Redis error getting state for session {session_id[:16]}...: {e}")
+            return None
 
     def exists(self, session_id: str) -> bool:
         """Check if session exists."""
