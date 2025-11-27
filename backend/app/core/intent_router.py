@@ -42,10 +42,6 @@ class RouteDecision(BaseModel):
     tool_sequence: List[ToolInvocationPlan] = Field(default_factory=list)
     entities_snapshot: dict[str, Any] = Field(default_factory=dict)
     fallback_reason: Optional[str] = None
-    should_enrich_with_rag: bool = Field(
-        default=False,
-        description="Whether to enrich MCP results with RAG context for richer answers"
-    )
 
     @property
     def uses_mcp(self) -> bool:
@@ -77,10 +73,6 @@ class LLMRoutingDecision(BaseModel):
     reasoning: str = Field(
         ...,
         description="Brief explanation in Arabic for the routing decision"
-    )
-    should_enrich_with_rag: bool = Field(
-        default=False,
-        description="If mode=MCP, should we also retrieve RAG context to enrich the answer with hospital/medical information?"
     )
 
 
@@ -192,24 +184,6 @@ class LLMRouter:
 3. إذا السؤال عن سعر أو موعد → استخدم MCP
 4. إذا السؤال عن معلومات طبية عامة أو خدمات المستشفى → استخدم RAG
 5. في حالة الشك، فضّل MCP إذا كان هناك إشارة لطبيب أو عيادة أو موعد
-
-## 🔄 النمط الهجين (Hybrid Mode):
-عند اختيار MCP، قرر أيضاً هل يحتاج السؤال إلى إضافة معلومات من RAG؟
-
-**استخدم should_enrich_with_rag=true عندما:**
-- السؤال عن مواعيد دكتور معين → قد يحتاج المستخدم لمعرفة تخصصه أو خبرته
-- السؤال عن قائمة الأطباء → إضافة معلومات عن تخصصاتهم من قاعدة المعرفة
-- السؤال عن توافر دكتور → إضافة السياق الطبي عن الدكتور
-
-**استخدم should_enrich_with_rag=false عندما:**
-- السؤال فقط عن السعر → الرقم كافٍ
-- السؤال بسيط عن موعد محدد → الجدول كافٍ
-
-**أمثلة:**
-- "مواعيد دكتور أحمد؟" → mode=MCP, should_enrich_with_rag=true (لإضافة معلومات عن الدكتور)
-- "كام سعر الكشف؟" → mode=MCP, should_enrich_with_rag=false (السعر فقط)
-- "مين الدكاترة؟" → mode=MCP, should_enrich_with_rag=true (لإضافة التخصصات)
-- "متى عيادة الأسنان؟" → mode=MCP, should_enrich_with_rag=false (الجدول كافٍ)
 
 ### الـ Intents المتاحة:
 - ask_price: سؤال عن الأسعار
@@ -349,7 +323,6 @@ def route_conversation(
         span.set_attribute("routing.llm_intent", llm_decision.intent)
         span.set_attribute("routing.llm_confidence", llm_decision.confidence)
         span.set_attribute("routing.llm_reasoning", llm_decision.reasoning)
-        span.set_attribute("routing.should_enrich_with_rag", llm_decision.should_enrich_with_rag)
         
         # Build tool sequence if MCP mode
         tools: List[ToolInvocationPlan] = []
@@ -379,14 +352,12 @@ def route_conversation(
             reason=f"{llm_decision.reasoning} (confidence: {llm_decision.confidence:.0%})",
             tool_sequence=tools,
             entities_snapshot=state.entities.model_dump(),
-            should_enrich_with_rag=llm_decision.should_enrich_with_rag,
         )
         
         logger.info(
             f"Final route: {decision.mode.value} | "
             f"Intent: {decision.intent} | "
-            f"Confidence: {llm_decision.confidence:.2f} | "
-            f"Enrich with RAG: {llm_decision.should_enrich_with_rag}"
+            f"Confidence: {llm_decision.confidence:.2f}"
         )
         
         return decision

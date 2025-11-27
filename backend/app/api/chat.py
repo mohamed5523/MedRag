@@ -427,62 +427,47 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                             "message": str(workflow_error),
                         },
                     )
-                    root_span.set_attribute("routing.mode", f"{RouteMode.RAG.value}.fallback")
-                    logger.info("Falling back to RAG after MCP failure: %s", workflow_error)
+                    root_span.set_attribute("routing.mode", "mcp.error")
+                    logger.info("MCP workflow failed: %s", workflow_error)
+
+                    error_message = str(workflow_error) or "معذرةً، حصل خطأ وأنا بحاول أجيب البيانات من نظام العيادات."
+                    short_term_memory.add_message(session_id, "assistant", error_message)
+                    audio_data, audio_size, has_audio = await _maybe_generate_audio(error_message)
+                    processing_time = time.time() - start_time
+                    root_span.set_attribute("total.duration_ms", processing_time * 1000)
+                    root_span.set_attribute("response.answer_length", len(error_message))
+                    root_span.set_attribute("response.has_audio", has_audio)
+                    if audio_size is not None:
+                        root_span.set_attribute("response.audio_size", audio_size)
+                    root_span.add_event(
+                        "request.completed",
+                        {
+                            "duration_ms": processing_time * 1000,
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                    )
+                    return ChatResponseWithAudio(
+                        answer=error_message,
+                        sources=[],
+                        context_count=0,
+                        model_used=qa_engine.model,
+                        tokens_used=None,
+                        audio_data=audio_data,
+                        audio_size=audio_size,
+                        has_audio=has_audio,
+                        error=fallback_reason,
+                    )
                 else:
-                    # MCP succeeded - check if we should enrich with RAG
+                    # MCP succeeded - pure MCP-only path (no RAG enrichment)
                     root_span.add_event(
                         "routing.mcp.success",
                         {
                             "tool_count": len(workflow_result.tool_audit),
-                            "should_enrich": decision.should_enrich_with_rag,
                         },
                     )
-                    
-                    if decision.should_enrich_with_rag:
-                        # Hybrid mode: Enrich MCP result with RAG context
-                        logger.info("Enriching MCP result with RAG context")
-                        root_span.set_attribute("routing.mode", "hybrid")
-                        
-                        with tracer.start_as_current_span("retrieve_enrichment_docs") as span:
-                            span.set_attribute("query.length", len(request.query))
-                            span.set_attribute("top_k", 3)  # Fewer docs for enrichment
-                            
-                            alpha_override = ARABIC_HYBRID_ALPHA if time_context.get("is_arabic") else None
-                            enrichment_docs = vector_store.retrieve(
-                                query=retrieval_query,
-                                top_k=3,  # Just a few docs for context
-                                alpha_override=alpha_override
-                            )
-                            
-                            span.set_attribute("results.count", len(enrichment_docs))
-                            logger.info(f"Retrieved {len(enrichment_docs)} enrichment documents")
-                        
-                        # Generate hybrid answer
-                        with tracer.start_as_current_span("generate_hybrid_answer") as span:
-                            span.set_attribute("mcp_context_length", len(workflow_result.qa_response.get("answer", "")))
-                            span.set_attribute("rag_docs_count", len(enrichment_docs))
-                            
-                            # Use the MCP answer as structured context
-                            mcp_context = workflow_result.qa_response.get("answer", "")
-                            
-                            hybrid_result = qa_engine.answer_with_hybrid_context(
-                                question=request.query,
-                                mcp_context=mcp_context,
-                                rag_contexts=enrichment_docs,
-                                time_context=time_context,
-                                chat_history=history_payload,
-                            )
-                            
-                            span.set_attribute("answer_length", len(hybrid_result.get("answer", "")))
-                            span.set_attribute("tokens_used", hybrid_result.get("tokens_used", 0))
-                        
-                        result_payload = hybrid_result
-                    else:
-                        # Pure MCP mode - use MCP result directly
-                        root_span.set_attribute("routing.mode", "mcp_only")
-                        result_payload = workflow_result.qa_response
-                    
+                    root_span.set_attribute("routing.mode", "mcp_only")
+
+                    result_payload = workflow_result.qa_response
                     short_term_memory.add_message(session_id, "assistant", result_payload.get("answer", ""))
                     audio_data, audio_size, has_audio = await _maybe_generate_audio(result_payload.get("answer", ""))
                     processing_time = time.time() - start_time
@@ -491,7 +476,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                     root_span.set_attribute("response.has_audio", has_audio)
                     if audio_size is not None:
                         root_span.set_attribute("response.audio_size", audio_size)
-                    
+
                     root_span.add_event(
                         "request.completed",
                         {
@@ -515,7 +500,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                         has_audio=has_audio,
                     )
 
-            # Retrieve relevant documents
+            # Retrieve relevant documents (RAG-only path)
             retrieve_start = time.time()
             with tracer.start_as_current_span("retrieve_documents") as span:
                 span.set_attribute("query.length", len(request.query))

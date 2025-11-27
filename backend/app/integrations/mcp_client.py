@@ -63,20 +63,50 @@ class ProviderRecord(MCPBaseModel):
             "clinic_id": _coerce_int(_pick(raw, ["clinic_id", "clinicid", "clinicId", "clinic"])),
             "clinic_name_ar": _pick(
                 raw,
-                ["clinic_name_ar", "clinicArabicName", "clinicnamear", "clinic_arabic", "clinicarabicname"],
+                [
+                    "clinic_name_ar",
+                    "clinicArabicName",
+                    "clinicnamear",
+                    "clinic_arabic",
+                    "clinicarabicname",
+                    "clinicName",
+                    "ClinicName",
+                ],
             ),
             "clinic_name_en": _pick(
                 raw,
-                ["clinic_name_en", "clinicEnglishName", "clinicnameen", "clinic_name"],
+                [
+                    "clinic_name_en",
+                    "clinicEnglishName",
+                    "clinicnameen",
+                    "clinic_name",
+                    "clinicNameEn",
+                    "clinicNameL",
+                    "clinicNameLatin",
+                ],
             ),
             "provider_id": _coerce_int(_pick(raw, ["provider_id", "providerid", "providerId", "doctorid"])),
             "provider_name_ar": _pick(
                 raw,
-                ["provider_name_ar", "providerArabicName", "providernamear", "doctorarabicname"],
+                [
+                    "provider_name_ar",
+                    "providerArabicName",
+                    "providernamear",
+                    "doctorarabicname",
+                    "doctornamea",
+                    "DoctorNameA",
+                ],
             ),
             "provider_name_en": _pick(
                 raw,
-                ["provider_name_en", "providerEnglishName", "providernameen", "doctorname"],
+                [
+                    "provider_name_en",
+                    "providerEnglishName",
+                    "providernameen",
+                    "doctorname",
+                    "DoctorNameL",
+                    "doctorNameEnglish",
+                ],
             ),
             "specialty": _pick(
                 raw,
@@ -89,64 +119,58 @@ class ProviderRecord(MCPBaseModel):
         """Match provider name with flexible partial matching."""
         if not name:
             return False
-        
-        # Normalize search term
-        search_normalized = _normalize_arabic(name.casefold())
-        search_words = set(search_normalized.split())
-        
-        # Check both Arabic and English names
+
+        search_normalized = _normalize_arabic(name)
+        search_core = _remove_stop_words(search_normalized, PROVIDER_STOP_WORDS)
+        search_tokens = _tokenize_variants(search_core, PROVIDER_STOP_WORDS)
+        if not search_tokens:
+            search_tokens = _tokenize_variants(search_normalized)
+
         for candidate in (self.provider_name_ar, self.provider_name_en):
             if not candidate:
                 continue
-            
-            candidate_normalized = _normalize_arabic(candidate.casefold())
-            
-            # Method 1: Substring match (original behavior)
-            if search_normalized in candidate_normalized:
+
+            candidate_normalized = _normalize_arabic(candidate)
+            candidate_core = _remove_stop_words(candidate_normalized, PROVIDER_STOP_WORDS)
+            candidate_tokens = _tokenize_variants(candidate_core, PROVIDER_STOP_WORDS)
+            if not candidate_tokens:
+                candidate_tokens = _tokenize_variants(candidate_normalized)
+
+            if _strings_close(search_core, candidate_core) or _strings_close(search_core, candidate_normalized):
                 return True
-            
-            # Method 2: Word-level matching (any search word in any candidate word)
-            candidate_words = set(candidate_normalized.split())
-            if search_words & candidate_words:  # Set intersection
+
+            if _tokens_overlap(search_tokens, candidate_tokens):
                 return True
-            
-            # Method 3: Any search word is substring of any candidate word
-            for search_word in search_words:
-                if any(search_word in cand_word for cand_word in candidate_words):
-                    return True
-        
+
         return False
 
     def matches_clinic(self, name: str) -> bool:
         """Match clinic name with flexible partial matching."""
         if not name:
             return False
-        
-        # Normalize search term
-        search_normalized = _normalize_arabic(name.casefold())
-        search_words = set(search_normalized.split())
-        
-        # Check both Arabic and English names
+
+        search_normalized = _normalize_arabic(name)
+        search_core = _remove_stop_words(search_normalized, CLINIC_STOP_WORDS)
+        search_tokens = _tokenize_variants(search_core, CLINIC_STOP_WORDS)
+        if not search_tokens:
+            search_tokens = _tokenize_variants(search_normalized)
+
         for candidate in (self.clinic_name_ar, self.clinic_name_en):
             if not candidate:
                 continue
-            
-            candidate_normalized = _normalize_arabic(candidate.casefold())
-            
-            # Method 1: Substring match
-            if search_normalized in candidate_normalized:
+
+            candidate_normalized = _normalize_arabic(candidate)
+            candidate_core = _remove_stop_words(candidate_normalized, CLINIC_STOP_WORDS)
+            candidate_tokens = _tokenize_variants(candidate_core, CLINIC_STOP_WORDS)
+            if not candidate_tokens:
+                candidate_tokens = _tokenize_variants(candidate_normalized)
+
+            if _strings_close(search_core, candidate_core) or _strings_close(search_core, candidate_normalized):
                 return True
-            
-            # Method 2: Word-level matching
-            candidate_words = set(candidate_normalized.split())
-            if search_words & candidate_words:
+
+            if _tokens_overlap(search_tokens, candidate_tokens):
                 return True
-            
-            # Method 3: Partial word matching
-            for search_word in search_words:
-                if any(search_word in cand_word for cand_word in candidate_words):
-                    return True
-        
+
         return False
 
 
@@ -232,7 +256,25 @@ class ProviderListPayload(BaseModel):
             if "providers" in data:
                 return {"providers": data["providers"]}
             if "data" in data:
-                return {"providers": data["data"]}
+                raw_list = data["data"]
+                if isinstance(raw_list, list) and raw_list:
+                    first = raw_list[0]
+                    if isinstance(first, dict) and "doctors" in first:
+                        flattened: List[Dict[str, Any]] = []
+                        for clinic in raw_list:
+                            clinic_data = clinic if isinstance(clinic, dict) else {}
+                            doctors = clinic_data.get("doctors") or []
+                            clinic_meta = {k: v for k, v in clinic_data.items() if k != "doctors"}
+                            if doctors:
+                                for doctor in doctors:
+                                    entry = dict(clinic_meta)
+                                    if isinstance(doctor, dict):
+                                        entry.update(doctor)
+                                    flattened.append(entry)
+                            else:
+                                flattened.append(clinic_meta)
+                        return {"providers": flattened}
+                return {"providers": raw_list}
         raise TypeError("Provider list response must be a list or contain 'providers'.")
 
     def find_provider(self, provider_name: str, clinic_name: Optional[str] = None) -> Optional[ProviderRecord]:
@@ -446,7 +488,7 @@ class MCPClient:
     ) -> ServicePriceResponse:
         params = {"clinicid": clinic_id}
         if provider_id:
-            params["providerid"] = provider_id
+            params["providerId"] = provider_id
 
         url = self._build_url(self.settings.service_price_url, self.settings.service_price_path)
         with tracer.start_as_current_span("mcp.get_service_price") as span:
@@ -558,14 +600,96 @@ def _coerce_float(value: Any) -> Optional[float]:
 
 
 def _normalize_arabic(text: str) -> str:
-    """Normalize Arabic text by removing diacritics and extra spaces."""
+    """
+    Normalize Arabic text for fuzzy matching by removing diacritics,
+    folding common letter variants, and collapsing whitespace.
+    This helps us match user typos such as:
+        "عيادة الاسنان" ↔ "عيادة الأسنان"
+        "دكتور اله" ↔ "دكتور إلـه"
+    """
     if not text:
         return ""
-    # Remove Arabic diacritics (tashkeel)
-    text = re.sub(r'[\u064B-\u065F\u0670]', '', text)
-    # Normalize spaces
-    text = ' '.join(text.split())
+
+    text = text.casefold()
+
+    # Remove tashkeel + tatweel
+    text = re.sub(r'[\u064B-\u065F\u0670\u0640]', '', text)
+
+    # Normalize lam-alef ligatures first (they expand to two characters)
+    for ligature in ("ﻻ", "ﻷ", "ﻹ", "ﻵ"):
+        text = text.replace(ligature, "لا")
+
+    replacements = {
+        "أ": "ا",
+        "إ": "ا",
+        "آ": "ا",
+        "ٱ": "ا",
+        "ى": "ي",
+        "ئ": "ي",
+        "ؤ": "و",
+        "ة": "ه",
+        "ۀ": "ه",
+        "گ": "ك",
+        "ڨ": "ق",
+        "چ": "ج",
+        "پ": "ب",
+        "ژ": "ز",
+    }
+    translation_table = str.maketrans(replacements)
+    text = text.translate(translation_table)
+
+    # Remove leftover punctuation (keep alphanumeric + Arabic letters + space)
+    text = re.sub(r"[^\w\s\u0600-\u06FF]", " ", text)
+
+    # Collapse whitespace
+    text = " ".join(text.split())
     return text.strip()
+
+
+CLINIC_STOP_WORDS: set[str] = {"عياده", "clinic"}
+PROVIDER_STOP_WORDS: set[str] = {"دكتور", "dr", "doctor", "دكتوره", "د"}
+
+
+def _remove_stop_words(text: str, stopwords: set[str]) -> str:
+    if not text:
+        return ""
+    tokens = [token for token in text.split() if token not in stopwords]
+    result = " ".join(tokens).strip()
+    return result or text
+
+
+def _tokenize_variants(text: str, stopwords: Optional[set[str]] = None) -> set[str]:
+    if not text:
+        return set()
+    tokens = text.split()
+    variants: set[str] = set()
+    for token in tokens:
+        if stopwords and token in stopwords:
+            continue
+        variants.add(token)
+        if token.startswith("ال") and len(token) > 2:
+            variants.add(token[2:])
+    return variants
+
+
+def _strings_close(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return left == right or left in right or right in left
+
+
+def _tokens_overlap(left: set[str], right: set[str]) -> bool:
+    if not left or not right:
+        return False
+    if left & right:
+        return True
+    for l_token in left:
+        for r_token in right:
+            if not l_token or not r_token:
+                continue
+            if l_token in r_token or r_token in l_token:
+                return True
+    return False
 
 
 def _calculate_similarity(text1: str, text2: str) -> float:

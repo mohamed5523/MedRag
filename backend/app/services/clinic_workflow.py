@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,10 +21,10 @@ from app.core.qa_engine import QAEngine
 from app.core.state_manager import ConversationState
 from app.integrations.mcp_client import (
     MCPClient,
-    MCPClientError,
     ProviderListPayload,
     ProviderRecord,
     ProviderScheduleResponse,
+    ScheduleSlot,
     ServicePriceResponse,
 )
 
@@ -77,9 +78,9 @@ class ClinicWorkflowService:
 
             try:
                 if decision.intent == "ask_price":
-                    docs, audit = await self._handle_pricing(state, tool_audit)
+                    docs, audit = await self._handle_pricing(state, tool_audit, question)
                 elif decision.intent in {"check_availability", "book_appointment"}:
-                    docs, audit = await self._handle_schedule(state, tool_audit)
+                    docs, audit = await self._handle_schedule(state, tool_audit, question)
                 elif decision.intent == "list_doctors":
                     docs, audit = await self._handle_list_doctors(state, tool_audit)
                 else:
@@ -112,8 +113,9 @@ class ClinicWorkflowService:
         self,
         state: ConversationState,
         audit: List[ToolAuditEntry],
+        question: str,
     ) -> Tuple[List[Document], List[ToolAuditEntry]]:
-        clinic_id, provider_id, provider_entry = await self._resolve_entities(state)
+        clinic_id, provider_id, provider_entry = await self._resolve_entities(state, audit, question)
         if not clinic_id:
             raise MCPWorkflowError(
                 "لم أقدر أحدد العيادة المطلوبة عشان أجيب الأسعار.",
@@ -150,38 +152,50 @@ class ClinicWorkflowService:
         self,
         state: ConversationState,
         audit: List[ToolAuditEntry],
+        question: str,
     ) -> Tuple[List[Document], List[ToolAuditEntry]]:
-        clinic_id, provider_id, provider_entry = await self._resolve_entities(state)
+        clinic_id, provider_id, provider_entry = await self._resolve_entities(
+            state, audit, question
+        )
         if not clinic_id:
             raise MCPWorkflowError(
                 "محتاج أعرف اسم العيادة عشان أقدر أجيب المواعيد.",
                 reason="missing_clinic",
             )
 
-        schedule_response = await self._client.get_clinic_provider_schedule(
-            clinic_id=clinic_id,
-            provider_id=provider_id,
-            day_id=None,
-        )
-        audit.append(
-            ToolAuditEntry(
-                name="get_clinic_provider_schedule",
-                status="success",
-                details={
-                    "clinic_id": clinic_id,
-                    "provider_id": provider_id,
-                    "slots": len(schedule_response.slots),
-                },
-            )
-        )
+        # For availability queries, call the schedule tool for each day of the week
+        # and aggregate all returned slots into a single unified schedule view.
+        all_slots: List[ScheduleSlot] = []
 
-        if not schedule_response.slots:
+        for day_id in range(1, 8):  # 1=Saturday .. 7=Friday (see DAY_NAME_TO_ID)
+            day_response = await self._client.get_clinic_provider_schedule(
+                clinic_id=clinic_id,
+                provider_id=provider_id,
+                day_id=day_id,
+            )
+            audit.append(
+                ToolAuditEntry(
+                    name="get_clinic_provider_schedule",
+                    status="success",
+                    details={
+                        "clinic_id": clinic_id,
+                        "provider_id": provider_id,
+                        "day_id": day_id,
+                        "slots": len(day_response.slots),
+                    },
+                )
+            )
+            if day_response.slots:
+                all_slots.extend(day_response.slots)
+
+        if not all_slots:
             raise MCPWorkflowError(
                 "مفيش مواعيد متاحة دلوقتي في النظام.",
                 reason="empty_schedule_response",
             )
 
-        context_text = _format_schedule(schedule_response, provider_entry)
+        aggregated_schedule = ProviderScheduleResponse(slots=all_slots)
+        context_text = _format_schedule(aggregated_schedule, provider_entry)
         doc = Document(
             page_content=context_text,
             metadata={"source": "mcp.provider_schedule"},
@@ -220,21 +234,52 @@ class ClinicWorkflowService:
     async def _resolve_entities(
         self,
         state: ConversationState,
+        audit: List[ToolAuditEntry],
+        raw_question: Optional[str] = None,
     ) -> Tuple[Optional[int], Optional[int], Optional[ProviderRecord]]:
-        """Resolve clinic and provider identifiers using MCP data with fuzzy matching."""
-
+        """
+        Resolve clinic and provider identifiers using MCP data with fuzzy matching.
+        
+        Optimized to fetch provider list ONCE and reuse for all lookups (exact and fuzzy).
+        """
         doctor_name = state.entities.doctor
         clinic_name = state.entities.clinic
+        question_text = state.last_user_question or raw_question or ""
+
+        # Fallback heuristics if entity extraction missed them
+        if not doctor_name:
+            inferred_doctor = _infer_doctor_from_text(question_text)
+            if inferred_doctor:
+                logger.debug("Inferred doctor name '%s' from question text.", inferred_doctor)
+                doctor_name = inferred_doctor
+
+        if not clinic_name:
+            inferred_clinic = _infer_clinic_from_context(state, question_text)
+            if inferred_clinic:
+                logger.debug("Inferred clinic name '%s' from state/question context.", inferred_clinic)
+                clinic_name = inferred_clinic
+
+        # ✅ Fetch provider list ONCE - all subsequent operations use this in-memory data
+        with tracer.start_as_current_span("mcp.get_clinic_provider_list") as span:
+            provider_list = await self._client.get_clinic_provider_list()
+            span.set_attribute("providers.count", len(provider_list.providers))
+            
+            audit.append(
+                ToolAuditEntry(
+                    name="get_clinic_provider_list",
+                    status="success",
+                    details={"providers_count": len(provider_list.providers)},
+                )
+            )
 
         provider_entry: Optional[ProviderRecord] = None
         
         if doctor_name:
-            # Try exact match first (fast path)
-            provider_entry = await self._client.lookup_provider_record(doctor_name, clinic_name=clinic_name)
+            # Try exact match first (in-memory, no API call)
+            provider_entry = provider_list.find_provider(doctor_name, clinic_name=clinic_name)
             
-            # If no exact match, try fuzzy matching
+            # If no exact match, try fuzzy matching (in-memory, no API call)
             if not provider_entry:
-                provider_list = await self._client.get_clinic_provider_list()
                 fuzzy_matches = provider_list.find_provider_fuzzy(
                     doctor_name, 
                     clinic_name=clinic_name,
@@ -277,12 +322,11 @@ class ClinicWorkflowService:
         if provider_entry:
             clinic_entry = provider_entry
         elif clinic_name:
-            # Try exact match first
-            clinic_entry = await self._client.lookup_clinic_record(clinic_name)
+            # Try exact match first (in-memory, no API call)
+            clinic_entry = provider_list.find_clinic(clinic_name)
             
-            # If no exact match, try fuzzy matching
+            # If no exact match, try fuzzy matching (in-memory, no API call)
             if not clinic_entry:
-                provider_list = await self._client.get_clinic_provider_list()
                 fuzzy_matches = provider_list.find_clinic_fuzzy(clinic_name, top_k=3)
                 
                 if fuzzy_matches:
@@ -313,6 +357,127 @@ class ClinicWorkflowService:
         provider_id = provider_entry.provider_id if provider_entry else None
 
         return clinic_id, provider_id, provider_entry
+
+
+def _infer_doctor_from_text(text: str) -> Optional[str]:
+    """
+    Extract doctor name heuristically from user text, e.g. "دكتور ابانوب".
+    Supports capturing up to 3 tokens after the keyword.
+    """
+    if not text:
+        return None
+
+    normalized = text.replace("ـ", "").strip()
+    # Capture sequences after "دكتور" / "د." / "د "
+    doctor_patterns = [
+        r"(?:دكتور|د\.?|د\s+)\s+([\u0621-\u064A\w]+(?:\s+[\u0621-\u064A\w]+){0,2})",
+    ]
+    for pattern in doctor_patterns:
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1)
+            candidate = _trim_punctuation(candidate)
+            candidate = _strip_leading_doctor_words(candidate)
+            candidate = _strip_trailing_clinic_words(candidate)
+            if candidate:
+                return candidate
+    return None
+
+
+def _infer_clinic_from_context(state: ConversationState, question_text: str) -> Optional[str]:
+    """
+    Infer clinic name using specialty or raw question text when entity extraction misses it.
+    """
+    specialty = state.entities.specialty if state and state.entities else None
+    if specialty:
+        normalized = specialty.strip()
+        if normalized:
+            if normalized.startswith("عيادة"):
+                return normalized
+            return f"عيادة {normalized}".strip()
+
+    inferred = _infer_phrase_after_keywords(
+        question_text,
+        keywords=["عيادة", "عياده", "clinic"],
+        max_words=4,
+    )
+    return inferred
+
+
+def _infer_phrase_after_keywords(
+    text: str,
+    keywords: List[str],
+    max_words: int = 3,
+) -> Optional[str]:
+    """
+    Given text, extract the phrase immediately following any of the provided keywords.
+    Useful for capturing "عيادة الأسنان" or "clinic oncology".
+    """
+    if not text:
+        return None
+
+    sanitized = text.replace("؟", "?").replace("،", ",")
+    for keyword in keywords:
+        pattern = rf"{keyword}\s+([\u0621-\u064A\w\s]+)"
+        match = re.search(pattern, sanitized, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        candidate = match.group(1)
+        candidate = re.split(r"[?.,!،]", candidate)[0]
+        words = candidate.split()
+        candidate = " ".join(words[:max_words]).strip()
+        if not candidate:
+            continue
+
+        # Ensure Arabic keywords keep the "عيادة" prefix for better matching
+        keyword_lower = keyword.lower()
+        if keyword_lower.startswith("عي"):
+            if not candidate.startswith("عيادة"):
+                candidate = f"عيادة {candidate}".strip()
+            else:
+                candidate = candidate
+        return candidate
+
+    return None
+
+
+def _trim_punctuation(value: str) -> str:
+    """Remove trailing punctuation and extra whitespace from a captured phrase."""
+    return value.strip(" \t\n\r?.,!،") if value else value
+
+
+def _strip_leading_doctor_words(value: str) -> str:
+    """Remove leading tokens such as 'دكتور' or 'Dr' from a captured phrase."""
+    if not value:
+        return value
+    tokens = value.split()
+    while tokens:
+        head = tokens[0].replace("ـ", "")
+        head_lower = head.casefold().strip(".")
+        if head_lower in {"دكتور", "دكتوره", "د", "dr", "doctor"}:
+            tokens.pop(0)
+            continue
+        break
+    return " ".join(tokens)
+
+
+def _strip_trailing_clinic_words(value: str) -> str:
+    """Remove trailing words such as 'لعيادة' that leak into doctor captures."""
+    if not value:
+        return value
+    tokens = value.split()
+    while tokens:
+        tail = tokens[-1].replace("ـ", "")
+        tail_lower = tail.casefold()
+        if any(
+            keyword in tail_lower
+            for keyword in ("عياد", "clinic")
+        ):
+            tokens.pop()
+            continue
+        break
+    return " ".join(tokens)
 
 
 def _format_service_prices(

@@ -135,7 +135,9 @@ class QAEngine:
             with tracer.start_as_current_span("prepare_context") as span:
                 context_texts = [doc.page_content for doc in contexts]
                 sources = [doc.metadata.get("source", "Unknown") for doc in contexts]
+                span.set_attribute("qa.input.question", question[:200])
                 span.set_attribute("context.count", len(context_texts))
+                span.set_attribute("context.sources", list(set(sources)))
                 
                 # Create context string
                 context_str = "\n\n".join([f"Document {i+1}: {text}" for i, text in enumerate(context_texts)])
@@ -264,6 +266,7 @@ class QAEngine:
             
             # Generate response (OpenAI SDK spans will be captured by instrumentation)
             with tracer.start_as_current_span("generate_with_openai") as span:
+                span.set_attribute("qa.input.question", question[:200])
                 span.set_attribute("model", self.model)
                 response = self.client.chat.completions.create(
                     model=self.model,
@@ -277,6 +280,13 @@ class QAEngine:
             
             # Get unique sources
             unique_sources = list(set(sources))
+
+            # Attach output preview to span
+            try:
+                span.set_attribute("qa.output.answer_preview", answer[:300])
+                span.set_attribute("qa.output.tokens_used", response.usage.total_tokens if response.usage else None)
+            except Exception:
+                pass
             
             return {
                 "answer": answer,
@@ -419,6 +429,9 @@ Use the official data as the foundation for your answer, and add medical context
             with tracer.start_as_current_span("generate_hybrid_with_openai") as span:
                 span.set_attribute("model", self.model)
                 span.set_attribute("mode", "hybrid")
+                span.set_attribute("qa.input.question", question[:200])
+                span.set_attribute("qa.input.mcp_context_preview", mcp_context[:300])
+                span.set_attribute("qa.input.rag_docs_count", len(rag_contexts))
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
@@ -429,6 +442,12 @@ Use the official data as the foundation for your answer, and add medical context
             
             answer = response.choices[0].message.content.strip()
             unique_sources = list(set(sources + ["MCP Clinic System"]))
+
+            try:
+                span.set_attribute("qa.output.answer_preview", answer[:300])
+                span.set_attribute("qa.output.tokens_used", response.usage.total_tokens if response.usage else None)
+            except Exception:
+                pass
             
             return {
                 "answer": answer,

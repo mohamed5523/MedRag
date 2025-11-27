@@ -98,7 +98,9 @@ async def get_service_price(
     params = {}
     params["clinicid"] = clinicid
     if providerid is not None:
-        params["providerid"] = providerid
+        # params["providerid"] = providerid
+        params["providerId"] = providerid 
+        
     
     return await fetch_text(
         settings.service_price_url,

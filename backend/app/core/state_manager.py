@@ -3,9 +3,11 @@ import os
 from typing import List, Literal, Optional
 
 from openai import OpenAI
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("medrag.state_manager")
 
 # ------------------------------------------------------------------------------
 # State Models
@@ -122,17 +124,30 @@ Now process the conversation.
             {"role": "user", "content": f"Current User Input:\n{current_query}"}
         ]
 
-        try:
-            response = self.client.beta.chat.completions.parse(
-                model=self.model,
-                messages=messages,
-                response_format=ConversationState
-            )
-            return response.choices[0].message.parsed
-
-        except Exception as e:
-            logger.error(f"State extraction failed: {e}")
-            return self._fallback_state(current_query)
+        with tracer.start_as_current_span("state.extract") as span:
+            span.set_attribute("state.input.query", current_query[:200])
+            span.set_attribute("state.input.history_len", len(chat_history))
+            span.set_attribute("state.input.has_previous_state", previous_state is not None)
+            try:
+                response = self.client.beta.chat.completions.parse(
+                    model=self.model,
+                    messages=messages,
+                    response_format=ConversationState
+                )
+                parsed: ConversationState = response.choices[0].message.parsed
+                # Output attributes for Phoenix
+                span.set_attribute("state.output.intent", parsed.intent)
+                span.set_attribute("state.output.target_entity_type", parsed.target_entity_type)
+                span.set_attribute("state.output.entities.doctor", parsed.entities.doctor or "")
+                span.set_attribute("state.output.entities.clinic", parsed.entities.clinic or "")
+                span.set_attribute("state.output.entities.hospital", parsed.entities.hospital or "")
+                span.set_attribute("state.output.entities.specialty", parsed.entities.specialty or "")
+                span.set_attribute("state.output.needs_followup", parsed.needs_followup)
+                return parsed
+            except Exception as e:
+                span.record_exception(e)
+                logger.error(f"State extraction failed: {e}")
+                return self._fallback_state(current_query)
 
     # --------------------------------------------------------------------------
     # Fallback state
