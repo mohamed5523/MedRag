@@ -194,14 +194,40 @@ class ScheduleSlot(MCPBaseModel):
             raise TypeError("ScheduleSlot expects a mapping.")
 
         raw = dict(data)
+        clinic_id = _coerce_int(_pick(raw, ["clinic_id", "clinicid", "clinicId"]))
+        provider_id = _coerce_int(_pick(raw, ["provider_id", "providerid", "providerId"]))
+        day_id = _coerce_int(_pick(raw, ["dayid", "day_id", "dayId"]))
+        day_name = _pick(raw, ["day", "day_name", "dayName", "dayArabicName"])
+
+        # Try to read explicit start/end fields first
+        shift_start = _pick(raw, ["shift_start", "start_time", "startTime", "shiftstart"])
+        shift_end = _pick(raw, ["shift_end", "end_time", "endTime", "shiftend"])
+
+        # Fallback: some MCP payloads use a single combined "shifttime" string, e.g. "07.30م-09.00م"
+        # If either side is missing, try to recover it from shifttime, without overwriting explicit values.
+        if not shift_start or not shift_end:
+            shifttime = _pick(raw, ["shifttime", "shiftTime", "shift_time"])
+            if isinstance(shifttime, str) and shifttime.strip():
+                parts = shifttime.split("-")
+                if len(parts) == 2:
+                    if not shift_start:
+                        shift_start = parts[0].strip()
+                    if not shift_end:
+                        shift_end = parts[1].strip()
+                elif not shift_start and not shift_end:
+                    # If we cannot safely split, and neither side is set, keep the whole value in start
+                    shift_start = shifttime.strip()
+
+        notes = _pick(raw, ["notes", "remarks"])
+
         return {
-            "clinic_id": _coerce_int(_pick(raw, ["clinic_id", "clinicid", "clinicId"])),
-            "provider_id": _coerce_int(_pick(raw, ["provider_id", "providerid", "providerId"])),
-            "day_id": _coerce_int(_pick(raw, ["dayid", "day_id", "dayId"])),
-            "day_name": _pick(raw, ["day", "day_name", "dayName", "dayArabicName"]),
-            "shift_start": _pick(raw, ["shift_start", "start_time", "startTime", "shiftstart"]),
-            "shift_end": _pick(raw, ["shift_end", "end_time", "endTime", "shiftend"]),
-            "notes": _pick(raw, ["notes", "remarks"]),
+            "clinic_id": clinic_id,
+            "provider_id": provider_id,
+            "day_id": day_id,
+            "day_name": day_name,
+            "shift_start": shift_start,
+            "shift_end": shift_end,
+            "notes": notes,
             "raw": raw,
         }
 
@@ -409,7 +435,35 @@ class ProviderScheduleResponse(BaseModel):
             if "slots" in data:
                 return {"slots": data["slots"]}
             if "data" in data:
-                return {"slots": data["data"]}
+                raw_list = data["data"]
+                # New MCP shape: top-level provider objects with nested "schedules" arrays
+                #   {
+                #     "providerId": "...",
+                #     "clinicId": "...",
+                #     "schedules": [{ "dayId": "...", "dayName": "...", "shifttime": "..." }]
+                #   }
+                if isinstance(raw_list, list) and raw_list:
+                    first = raw_list[0]
+                    if isinstance(first, dict) and "schedules" in first:
+                        flattened: List[Dict[str, Any]] = []
+                        for provider in raw_list:
+                            provider_data = provider if isinstance(provider, dict) else {}
+                            base_meta = {
+                                k: v for k, v in provider_data.items() if k != "schedules"
+                            }
+                            schedules = provider_data.get("schedules") or []
+                            if schedules:
+                                for schedule in schedules:
+                                    entry = dict(base_meta)
+                                    if isinstance(schedule, dict):
+                                        entry.update(schedule)
+                                    flattened.append(entry)
+                            else:
+                                # Provider record without schedules – keep as-is so we don't lose information
+                                flattened.append(base_meta)
+                        return {"slots": flattened}
+                # Fallback to legacy behavior: assume "data" already contains slot-like entries
+                return {"slots": raw_list}
         raise TypeError("Schedule response must be a list or contain 'slots'.")
 
 
