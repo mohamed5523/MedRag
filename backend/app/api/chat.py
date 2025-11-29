@@ -235,7 +235,7 @@ async def query_documents(request: ChatRequest, x_session_id: Optional[str] = He
                 ]
                 span.add_event("answer.generation.started", {"timestamp": datetime.now().isoformat()})
                 
-                result = qa_engine.answer_question(
+                result = await qa_engine.answer_question(
                     question=rewritten_query,
                     contexts=relevant_docs,
                     time_context=time_context,
@@ -562,7 +562,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 span.set_attribute("timezone", time_context["tz_name"])
                 span.add_event("answer.generation.started", {"timestamp": datetime.now().isoformat()})
 
-                result = qa_engine.answer_question(
+                result = await qa_engine.answer_question(
                     question=rewritten_query,
                     contexts=relevant_docs,
                     time_context=time_context,

@@ -18,7 +18,7 @@ except Exception:
         from langchain.schema import Document
     except Exception:
         from langchain.docstore.document import Document
-from openai import OpenAI
+from openai import AsyncOpenAI
 from opentelemetry import trace
 
 # Load environment variables
@@ -40,7 +40,7 @@ class QAEngine:
             logger.warning("OPENAI_API_KEY not found in environment variables")
             self.client = None
         else:
-            self.client = OpenAI(api_key=self.api_key)
+            self.client = AsyncOpenAI(api_key=self.api_key)
             logger.info(f"QA Engine initialized with model: {model}")
     
     def _is_arabic_query(self, text: str) -> bool:
@@ -109,7 +109,7 @@ class QAEngine:
         )
         return rewritten, ctx
 
-    def answer_question(
+    async def answer_question(
         self,
         question: str,
         contexts: List[Document],
@@ -268,7 +268,7 @@ class QAEngine:
             with tracer.start_as_current_span("generate_with_openai") as span:
                 span.set_attribute("qa.input.question", question[:200])
                 span.set_attribute("model", self.model)
-                response = self.client.chat.completions.create(
+                response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=0,
@@ -307,7 +307,7 @@ class QAEngine:
                 "error": str(e)
             }
     
-    def answer_with_hybrid_context(
+    async def answer_with_hybrid_context(
         self,
         question: str,
         mcp_context: str,
@@ -432,7 +432,7 @@ Use the official data as the foundation for your answer, and add medical context
                 span.set_attribute("qa.input.question", question[:200])
                 span.set_attribute("qa.input.mcp_context_preview", mcp_context[:300])
                 span.set_attribute("qa.input.rag_docs_count", len(rag_contexts))
-                response = self.client.chat.completions.create(
+                response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=0,

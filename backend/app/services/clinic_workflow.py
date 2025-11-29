@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import defaultdict
@@ -57,6 +58,10 @@ class ClinicWorkflowService:
     def __init__(self, mcp_client: Optional[MCPClient] = None):
         self._client = mcp_client or MCPClient()
 
+    async def aclose(self):
+        """Close the underlying MCP client."""
+        await self._client.aclose()
+
     async def run(
         self,
         *,
@@ -97,7 +102,7 @@ class ClinicWorkflowService:
             span.set_attribute("workflow.context_docs", len(docs))
 
             time_context = qa_engine.build_time_context(question)
-            qa_payload = qa_engine.answer_question(
+            qa_payload = await qa_engine.answer_question(
                 question=question,
                 contexts=docs,
                 time_context=time_context,
@@ -167,12 +172,20 @@ class ClinicWorkflowService:
         # and aggregate all returned slots into a single unified schedule view.
         all_slots: List[ScheduleSlot] = []
 
-        for day_id in range(1, 8):  # 1=Saturday .. 7=Friday (see DAY_NAME_TO_ID)
-            day_response = await self._client.get_clinic_provider_schedule(
+        # Create tasks for all days to run in parallel
+        tasks = [
+            self._client.get_clinic_provider_schedule(
                 clinic_id=clinic_id,
                 provider_id=provider_id,
                 day_id=day_id,
             )
+            for day_id in range(1, 8)  # 1=Saturday .. 7=Friday (see DAY_NAME_TO_ID)
+        ]
+        
+        # Execute all requests concurrently
+        day_responses = await asyncio.gather(*tasks)
+
+        for day_id, day_response in enumerate(day_responses, start=1):
             audit.append(
                 ToolAuditEntry(
                     name="get_clinic_provider_schedule",

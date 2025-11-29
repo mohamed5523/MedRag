@@ -93,6 +93,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ Error closing Redis: {e}")
 
+    # Close global services
+    try:
+        await chat.clinic_workflow.aclose()
+        logger.info("🔒 Clinic workflow service closed")
+    except Exception as e:
+        logger.warning(f"⚠️ Error closing clinic workflow: {e}")
+
 
 # Create FastAPI app with lifespan handler
 app = FastAPI(

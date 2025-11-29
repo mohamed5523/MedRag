@@ -437,6 +437,22 @@ class MCPClient:
 
     def __init__(self, settings: Optional[MCPSettings] = None):
         self.settings = settings or get_mcp_settings()
+        self._http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                timeout=self.settings.request_timeout_seconds,
+                connect=self.settings.connect_timeout_seconds
+            )
+        )
+
+    async def aclose(self):
+        """Close the underlying HTTP client."""
+        await self._http_client.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.aclose()
 
     async def get_clinic_provider_list(self) -> ProviderListPayload:
         if not self.settings.enabled:
@@ -534,28 +550,22 @@ class MCPClient:
         if self.settings.basic_auth:
             auth = (self.settings.basic_auth.username, self.settings.basic_auth.password)
 
-        timeout = httpx.Timeout(
-            timeout=self.settings.request_timeout_seconds,
-            connect=self.settings.connect_timeout_seconds,
-        )
-
         attempts = max(self.settings.max_retries, 0) + 1
         delay = self.settings.retry_backoff_seconds
         last_error: Optional[Exception] = None
 
         for attempt in range(1, attempts + 1):
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.get(url, params=params, headers=headers, auth=auth)
-                    response.raise_for_status()
-                    span and span.add_event(
-                        "mcp.response.received",
-                        {
-                            "status_code": response.status_code,
-                            "attempt": attempt,
-                        },
-                    )
-                    return response.json()
+                response = await self._http_client.get(url, params=params, headers=headers, auth=auth)
+                response.raise_for_status()
+                span and span.add_event(
+                    "mcp.response.received",
+                    {
+                        "status_code": response.status_code,
+                        "attempt": attempt,
+                    },
+                )
+                return response.json()
 
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
