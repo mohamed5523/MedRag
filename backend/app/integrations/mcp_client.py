@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any, Dict, Iterable, List, Optional
@@ -462,6 +463,15 @@ class MCPClient:
         with tracer.start_as_current_span("mcp.get_clinic_provider_list") as span:
             span.set_attribute("mcp.url", url)
             payload = await self._request_json(url, span=span)
+            # Attach a preview of the raw MCP payload for observability in Phoenix
+            try:
+                span.set_attribute(
+                    "mcp.response.preview",
+                    json.dumps(payload, ensure_ascii=False)[:1000],
+                )
+            except Exception:
+                # Best-effort only – never fail the request because of logging
+                logger.debug("Failed to serialize MCP provider list payload for preview", exc_info=True)
             try:
                 result = ProviderListPayload.model_validate(payload)
             except ValidationError as exc:
@@ -490,6 +500,14 @@ class MCPClient:
             if day_id:
                 span.set_attribute("mcp.params.dayid", day_id)
             payload = await self._request_json(url, params=params, span=span)
+            # Attach a preview of the raw MCP payload for observability in Phoenix
+            try:
+                span.set_attribute(
+                    "mcp.response.preview",
+                    json.dumps(payload, ensure_ascii=False)[:1000],
+                )
+            except Exception:
+                logger.debug("Failed to serialize MCP schedule payload for preview", exc_info=True)
             try:
                 result = ProviderScheduleResponse.model_validate(payload)
             except ValidationError as exc:
@@ -513,6 +531,14 @@ class MCPClient:
             if provider_id:
                 span.set_attribute("mcp.params.providerid", provider_id)
             payload = await self._request_json(url, params=params, span=span)
+            # Attach a preview of the raw MCP payload for observability in Phoenix
+            try:
+                span.set_attribute(
+                    "mcp.response.preview",
+                    json.dumps(payload, ensure_ascii=False)[:1000],
+                )
+            except Exception:
+                logger.debug("Failed to serialize MCP service price payload for preview", exc_info=True)
             try:
                 result = ServicePriceResponse.model_validate(payload)
             except ValidationError as exc:

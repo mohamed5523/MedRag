@@ -97,9 +97,20 @@ class ClinicWorkflowService:
                 span.record_exception(exc)
                 span.set_attribute("workflow.failure_reason", exc.reason)
                 raise
-
+            # Attach tool audit and MCP-derived context previews so they are visible in Phoenix
             tool_audit.extend(audit)
             span.set_attribute("workflow.context_docs", len(docs))
+            try:
+                if docs:
+                    combined_context = "\n\n".join(doc.page_content for doc in docs)
+                    span.set_attribute("workflow.mcp_context_preview", combined_context[:1000])
+                    span.set_attribute(
+                        "workflow.mcp_context_sources",
+                        [doc.metadata.get("source", "Unknown") for doc in docs],
+                    )
+            except Exception:
+                # Never break the workflow because of tracing/serialization issues
+                logger.debug("Failed to attach MCP context preview to span", exc_info=True)
 
             time_context = qa_engine.build_time_context(question)
             qa_payload = await qa_engine.answer_question(

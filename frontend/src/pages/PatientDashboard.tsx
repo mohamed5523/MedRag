@@ -28,7 +28,7 @@ const PatientDashboard = () => {
     const now = new Date();
     const hourEEST = (now.getUTCHours() + 3) % 24; // EEST = UTC+3
     const greeting = hourEEST < 12 ? 'صَبَاح الخِير' : 'مَسَاء الخِير';
-    return `${greeting} يا أفندم، مع حضرتك المساعد الشخصي، اسمي كيميت من مستشفى مارمَرقُس. إزاي أقدر أساعدك النهاردة؟`;
+    return `${greeting} يا أفندم، مع حضرتك المساعد الشخصي، اسمي كيميت. إزاي أقدر أساعدك النهاردة؟`;
     // return `${greeting} يا أَفَندِم، مَع حَضْرِتِك المُساعِد الشَّخصِي، وَاِسمِي كيمِت، مِن مُستَشفَى مار مَرقُس. مُمكِن أَساعِد حَضْرِتِك إِزَّاي؟`;
   })();
   const [messages, setMessages] = useState<Message[]>([
