@@ -251,18 +251,46 @@ class ServicePriceRecord(MCPBaseModel):
 
         raw = dict(data)
         return {
-            "clinic_id": _coerce_int(_pick(raw, ["clinic_id", "clinicid", "clinicId"])),
-            "provider_id": _coerce_int(_pick(raw, ["provider_id", "providerid", "providerId"])),
+            # Accept both snake_case and PascalCase IDs used by the MCP payload
+            "clinic_id": _coerce_int(
+                _pick(raw, ["clinic_id", "clinicid", "clinicId", "ClinicId"])
+            ),
+            "provider_id": _coerce_int(
+                _pick(raw, ["provider_id", "providerid", "providerId", "ProviderId"])
+            ),
+            # Prefer Arabic name; fall back to generic ServiceName if that's all we have
             "service_name_ar": _pick(
                 raw,
-                ["service_name_ar", "serviceArabicName", "servicear"],
+                [
+                    "service_name_ar",
+                    "serviceArabicName",
+                    "servicear",
+                    "ServiceNameAr",
+                    "ServiceNameArabic",
+                    "ServiceName",
+                ],
             ),
+            # English / Latin variants; also fall back to ServiceName if present there
             "service_name_en": _pick(
                 raw,
-                ["service_name_en", "serviceEnglishName", "serviceen", "servicename"],
+                [
+                    "service_name_en",
+                    "serviceEnglishName",
+                    "serviceen",
+                    "servicename",
+                    "ServiceNameEn",
+                    "ServiceNameLatin",
+                    "ServiceName",
+                ],
             ),
-            "price": _coerce_float(_pick(raw, ["price", "service_price", "amount"])),
-            "currency": _pick(raw, ["currency", "currency_code"]),
+            # Map ServicePrice as well as older keys
+            "price": _coerce_float(
+                _pick(raw, ["price", "service_price", "amount", "ServicePrice"])
+            ),
+            "currency": _pick(
+                raw,
+                ["currency", "currency_code", "Currency", "currencyCode"],
+            ),
             "raw": raw,
         }
 
@@ -576,7 +604,8 @@ class MCPClient:
     ) -> ServicePriceResponse:
         params = {"clinicid": clinic_id}
         if provider_id:
-            params["providerId"] = provider_id
+            params["providerid"] = provider_id
+
 
         url = self._build_url(self.settings.service_price_url, self.settings.service_price_path)
         with tracer.start_as_current_span("mcp.get_service_price") as span:
