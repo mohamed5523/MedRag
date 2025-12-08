@@ -241,8 +241,6 @@ def _match_single_token(
 
     for d in candidates:
         pos_score, matched_first = compute_positional_token_weight(token, d.tokens)
-        if pos_score < min_score:
-            continue
 
         # Fuzzy full-name similarity (Arabic & English)
         q_str = token
@@ -258,6 +256,10 @@ def _match_single_token(
 
         # Final score: position is dominant here
         final_score = 0.6 * pos_score + 0.4 * fuzzy_name_score
+
+        # Filter by final_score (consistent with _match_multi_token)
+        if final_score < min_score:
+            continue
 
         scored.append(
             DoctorMatch(
