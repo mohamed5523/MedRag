@@ -21,6 +21,9 @@ from app.core.intent_router import RouteDecision, RouteMode
 from app.core.qa_engine import QAEngine
 from app.core.state_manager import ConversationState
 from app.integrations.mcp_client import (
+    DoctorMatchResult,
+    HybridMatchResponse,
+    HybridMatchStatus,
     MCPClient,
     ProviderListPayload,
     ProviderRecord,
@@ -262,9 +265,12 @@ class ClinicWorkflowService:
         raw_question: Optional[str] = None,
     ) -> Tuple[Optional[int], Optional[int], Optional[ProviderRecord]]:
         """
-        Resolve clinic and provider identifiers using MCP data with fuzzy matching.
+        Resolve clinic and provider identifiers using MCP hybrid matching.
         
-        Optimized to fetch provider list ONCE and reuse for all lookups (exact and fuzzy).
+        Uses the new match_doctor_hybrid MCP tool for advanced name matching with:
+        - Token-based matching with positional weights
+        - Fuzzy matching for typos and variations
+        - Arabic/English name support
         """
         doctor_name = state.entities.doctor
         clinic_name = state.entities.clinic
@@ -283,102 +289,109 @@ class ClinicWorkflowService:
                 logger.debug("Inferred clinic name '%s' from state/question context.", inferred_clinic)
                 clinic_name = inferred_clinic
 
-        # ✅ Fetch provider list ONCE - all subsequent operations use this in-memory data
-        with tracer.start_as_current_span("mcp.get_clinic_provider_list") as span:
-            provider_list = await self._client.get_clinic_provider_list()
-            span.set_attribute("providers.count", len(provider_list.providers))
-            
-            audit.append(
-                ToolAuditEntry(
-                    name="get_clinic_provider_list",
-                    status="success",
-                    details={"providers_count": len(provider_list.providers)},
-                )
-            )
-
         provider_entry: Optional[ProviderRecord] = None
+        clinic_id: Optional[int] = None
+        provider_id: Optional[int] = None
         
         if doctor_name:
-            # Try exact match first (in-memory, no API call)
-            provider_entry = provider_list.find_provider(doctor_name, clinic_name=clinic_name)
-            
-            # If no exact match, try fuzzy matching (in-memory, no API call)
-            if not provider_entry:
-                fuzzy_matches = provider_list.find_provider_fuzzy(
-                    doctor_name, 
+            # Use the new hybrid matching MCP tool
+            with tracer.start_as_current_span("mcp.match_doctor_hybrid") as span:
+                span.set_attribute("query.doctor_name", doctor_name)
+                if clinic_name:
+                    span.set_attribute("query.clinic_name", clinic_name)
+                
+                match_response = await self._client.match_doctor_hybrid(
+                    query=doctor_name,
                     clinic_name=clinic_name,
-                    top_k=3
+                    top_k=5,
+                    min_score_multi=0.6,
+                    min_score_single=0.55,
                 )
                 
-                if fuzzy_matches:
-                    best_match, confidence = fuzzy_matches[0]
-                    
-                    if confidence >= 0.85:
-                        # Very high confidence - use it with a note
-                        logger.info(f"Auto-selected provider {best_match.provider_name_ar} with confidence {confidence:.2f}")
-                        provider_entry = best_match
-                        
-                    elif confidence >= 0.65:
-                        # Good confidence - use it but inform user
-                        logger.info(f"Using provider {best_match.provider_name_ar} with confidence {confidence:.2f}")
-                        provider_entry = best_match
-                        
-                    else:
-                        # Low confidence - show alternatives
-                        alt_names = [
-                            f"{match.provider_name_ar or match.provider_name_en}"
-                            for match, score in fuzzy_matches[:3]
-                            if score > 0.4
-                        ]
-                        
-                        if alt_names:
-                            raise MCPWorkflowError(
-                                f"مفيش دكتور بالاسم ده بالضبط. هل تقصد: {' أو '.join(alt_names)}؟",
-                                reason="provider_ambiguous",
-                            )
-                        else:
-                            raise MCPWorkflowError(
-                                "ملقتش دكتور بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
-                                reason="provider_not_found",
-                            )
-
-        clinic_entry: Optional[ProviderRecord] = None
-        if provider_entry:
-            clinic_entry = provider_entry
-        elif clinic_name:
-            # Try exact match first (in-memory, no API call)
-            clinic_entry = provider_list.find_clinic(clinic_name)
-            
-            # If no exact match, try fuzzy matching (in-memory, no API call)
-            if not clinic_entry:
-                fuzzy_matches = provider_list.find_clinic_fuzzy(clinic_name, top_k=3)
+                audit.append(
+                    ToolAuditEntry(
+                        name="match_doctor_hybrid",
+                        status="success",
+                        details={
+                            "query": doctor_name,
+                            "clinic_name": clinic_name,
+                            "status": match_response.status.value,
+                            "candidates_count": len(match_response.candidates),
+                            "best_match_score": match_response.best_match.score if match_response.best_match else None,
+                        },
+                    )
+                )
                 
-                if fuzzy_matches:
-                    best_match, confidence = fuzzy_matches[0]
+                span.set_attribute("match.status", match_response.status.value)
+                span.set_attribute("match.candidates_count", len(match_response.candidates))
+                
+                if match_response.status == HybridMatchStatus.UNAMBIGUOUS_MATCH and match_response.best_match:
+                    # Clear match found - use it
+                    best = match_response.best_match
+                    logger.info(f"Hybrid match found: {best.name_ar or best.name_en} (score: {best.score:.2f})")
                     
-                    if confidence >= 0.75:
-                        logger.info(f"Using clinic {best_match.clinic_name_ar} with confidence {confidence:.2f}")
-                        clinic_entry = best_match
+                    # Convert DoctorMatchResult to ProviderRecord for compatibility
+                    provider_entry = ProviderRecord(
+                        provider_id=int(best.provider_id) if best.provider_id else None,
+                        clinic_id=int(best.clinic_id) if best.clinic_id else None,
+                        provider_name_ar=best.name_ar,
+                        provider_name_en=best.name_en,
+                        clinic_name_ar=best.clinic_name,
+                        clinic_name_en=best.clinic_name,
+                    )
+                    clinic_id = int(best.clinic_id) if best.clinic_id else None
+                    provider_id = int(best.provider_id) if best.provider_id else None
+                    
+                elif match_response.status == HybridMatchStatus.AMBIGUOUS_NEED_MORE_INFO:
+                    # Multiple matches - ask user for clarification
+                    alt_names = [
+                        candidate.name_ar or candidate.name_en
+                        for candidate in match_response.candidates[:3]
+                    ]
+                    if alt_names:
+                        raise MCPWorkflowError(
+                            f"يوجد أكثر من دكتور بنفس الاسم. هل تقصد: {' أو '.join(alt_names)}؟",
+                            reason="provider_ambiguous",
+                        )
                     else:
-                        alt_names = [
-                            match.clinic_name_ar or match.clinic_name_en
-                            for match, score in fuzzy_matches[:3]
-                            if score > 0.4
-                        ]
-                        if alt_names:
-                            raise MCPWorkflowError(
-                                f"مفيش عيادة بالاسم ده بالضبط. هل تقصد: {' أو '.join(alt_names)}؟",
-                                reason="clinic_ambiguous",
-                            )
-                        else:
-                            # All matches below display threshold
-                            raise MCPWorkflowError(
-                                "ملقتش عيادة بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
-                                reason="clinic_not_found",
-                            )
+                        raise MCPWorkflowError(
+                            match_response.message,
+                            reason="provider_ambiguous",
+                        )
+                        
+                elif match_response.status == HybridMatchStatus.NO_MATCH:
+                    # No match found
+                    raise MCPWorkflowError(
+                        match_response.message or "ملقتش دكتور بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
+                        reason="provider_not_found",
+                    )
 
-        clinic_id = clinic_entry.clinic_id if clinic_entry else None
-        provider_id = provider_entry.provider_id if provider_entry else None
+        # If we have a clinic name but no doctor (or doctor resolution gave us clinic info)
+        if not clinic_id and clinic_name:
+            # Fetch provider list to find clinic
+            with tracer.start_as_current_span("mcp.get_clinic_provider_list") as span:
+                provider_list = await self._client.get_clinic_provider_list()
+                span.set_attribute("providers.count", len(provider_list.providers))
+                
+                audit.append(
+                    ToolAuditEntry(
+                        name="get_clinic_provider_list",
+                        status="success",
+                        details={"providers_count": len(provider_list.providers)},
+                    )
+                )
+            
+            # Try exact match for clinic
+            clinic_entry = provider_list.find_clinic(clinic_name)
+            if clinic_entry:
+                clinic_id = clinic_entry.clinic_id
+                logger.info(f"Found clinic by exact match: {clinic_entry.clinic_name_ar}")
+            else:
+                # No exact clinic match - inform user
+                raise MCPWorkflowError(
+                    "ملقتش عيادة بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
+                    reason="clinic_not_found",
+                )
 
         return clinic_id, provider_id, provider_entry
 

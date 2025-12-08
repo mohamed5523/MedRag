@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urljoin
 
@@ -33,6 +34,46 @@ class MCPClientError(Exception):
 
 class MCPResponseValidationError(MCPClientError):
     """Raised when a response payload cannot be validated."""
+
+
+# ------------------------------------------------------------------------------
+# Hybrid Doctor Matching Models
+# ------------------------------------------------------------------------------
+
+class HybridMatchStatus(str, Enum):
+    """Status of a hybrid doctor match operation."""
+    UNAMBIGUOUS_MATCH = "UNAMBIGUOUS_MATCH"
+    AMBIGUOUS_NEED_MORE_INFO = "AMBIGUOUS_NEED_MORE_INFO"
+    NO_MATCH = "NO_MATCH"
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
+
+
+class DoctorMatchResult(BaseModel):
+    """A single doctor match result with scoring details."""
+    provider_id: str
+    clinic_id: str
+    clinic_name: str
+    name_ar: str
+    name_en: str
+    score: float = Field(..., description="Final similarity score (0–1)")
+    token_overlap: float = Field(..., description="Token overlap (0–1)")
+    fuzzy_name_score: float = Field(..., description="Fuzzy full-name score (0–1)")
+    position_score: float = Field(..., description="Positional score (0–1)")
+    matched_by_first_name: bool = Field(..., description="True if first-name was the main match")
+    matched_tokens: List[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="allow")
+
+
+class HybridMatchResponse(BaseModel):
+    """Response from the hybrid doctor matching operation."""
+    status: HybridMatchStatus
+    message: str
+    query_tokens: List[str]
+    best_match: Optional[DoctorMatchResult] = None
+    candidates: List[DoctorMatchResult] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="allow")
 
 
 class MCPBaseModel(BaseModel):
@@ -351,100 +392,6 @@ class ProviderListPayload(BaseModel):
             if record.matches_clinic(clinic_name):
                 return record
         return None
-    
-    def find_provider_fuzzy(
-        self, 
-        provider_name: str, 
-        clinic_name: Optional[str] = None,
-        top_k: int = 3
-    ) -> List[tuple[ProviderRecord, float]]:
-        """
-        Find providers with confidence scores using fuzzy matching.
-        Returns list of (provider, confidence_score) tuples, sorted by score.
-        
-        Args:
-            provider_name: Provider name to search for
-            clinic_name: Optional clinic name to filter by
-            top_k: Maximum number of results to return
-            
-        Returns:
-            List of (ProviderRecord, confidence_score) tuples
-        """
-        if not provider_name:
-            return []
-        
-        candidates: List[tuple[ProviderRecord, float]] = []
-        
-        for record in self.providers:
-            # Filter by clinic if specified
-            if clinic_name and not record.matches_clinic(clinic_name):
-                continue
-            
-            # Calculate similarity to both Arabic and English names
-            max_score = 0.0
-            
-            if record.provider_name_ar:
-                score_ar = _calculate_similarity(provider_name, record.provider_name_ar)
-                max_score = max(max_score, score_ar)
-            
-            if record.provider_name_en:
-                score_en = _calculate_similarity(provider_name, record.provider_name_en)
-                max_score = max(max_score, score_en)
-            
-            if max_score > 0.3:  # Minimum threshold
-                candidates.append((record, max_score))
-        
-        # Sort by score descending
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        return candidates[:top_k]
-    
-    def find_clinic_fuzzy(
-        self, 
-        clinic_name: str,
-        top_k: int = 3
-    ) -> List[tuple[ProviderRecord, float]]:
-        """
-        Find clinics with confidence scores using fuzzy matching.
-        Returns list of (provider_record, confidence_score) tuples, sorted by score.
-        Ensures unique clinics by keeping only the best-scoring variant.
-        
-        Args:
-            clinic_name: Clinic name to search for
-            top_k: Maximum number of results to return
-            
-        Returns:
-            List of (ProviderRecord, confidence_score) tuples
-        """
-        if not clinic_name:
-            return []
-        
-        # Use dict to track best score per clinic_id
-        best_by_clinic: Dict[int, tuple[ProviderRecord, float]] = {}
-        
-        for record in self.providers:
-            clinic_id = record.clinic_id
-            if not clinic_id:
-                continue
-            
-            max_score = 0.0
-            if record.clinic_name_ar:
-                score_ar = _calculate_similarity(clinic_name, record.clinic_name_ar)
-                max_score = max(max_score, score_ar)
-            
-            if record.clinic_name_en:
-                score_en = _calculate_similarity(clinic_name, record.clinic_name_en)
-                max_score = max(max_score, score_en)
-            
-            # Only consider matches above minimum threshold
-            if max_score > 0.3:
-                # Keep this variant only if it's the best for this clinic_id
-                if clinic_id not in best_by_clinic or max_score > best_by_clinic[clinic_id][1]:
-                    best_by_clinic[clinic_id] = (record, max_score)
-        
-        # Convert to list and sort by score
-        candidates = list(best_by_clinic.values())
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        return candidates[:top_k]
 
 
 class ProviderScheduleResponse(BaseModel):
@@ -645,6 +592,88 @@ class MCPClient:
         provider_list = await self.get_clinic_provider_list()
         return provider_list.find_clinic(clinic_name)
 
+    async def match_doctor_hybrid(
+        self,
+        query: str,
+        clinic_id: Optional[str] = None,
+        clinic_name: Optional[str] = None,
+        top_k: int = 5,
+        min_score_multi: float = 0.6,
+        min_score_single: float = 0.55,
+    ) -> HybridMatchResponse:
+        """
+        Match a doctor name using hybrid token-based and fuzzy matching.
+        
+        This method calls the MCP server's match_doctor_hybrid tool which provides:
+        - Arabic and English name support
+        - Partial name matching (first name, last name, etc.)
+        - Positional weighting (first name matches score higher)
+        - Fuzzy matching for typos and variations
+        
+        Args:
+            query: User text containing doctor name or partial name
+            clinic_id: Optional filter by exact clinic ID
+            clinic_name: Optional filter by clinic name (partial match supported)
+            top_k: Maximum number of candidates to return (default: 5)
+            min_score_multi: Minimum score for multi-token matches (default: 0.6)
+            min_score_single: Minimum score for single-token matches (default: 0.55)
+            
+        Returns:
+            HybridMatchResponse containing:
+            - status: UNAMBIGUOUS_MATCH, AMBIGUOUS_NEED_MORE_INFO, or NO_MATCH
+            - message: Human-readable message in Arabic
+            - query_tokens: Tokenized query
+            - best_match: Best matching doctor (if found)
+            - candidates: List of candidate matches with scores
+        """
+        if not self.settings.enabled:
+            raise MCPClientError("MCP client is disabled via configuration.")
+
+        # Build URL for the match endpoint
+        url = self._build_url(None, "/providers/match")
+        
+        params = {
+            "query": query,
+            "top_k": top_k,
+            "min_score_multi": min_score_multi,
+            "min_score_single": min_score_single,
+        }
+        if clinic_id:
+            params["clinic_id"] = clinic_id
+        if clinic_name:
+            params["clinic_name"] = clinic_name
+
+        with tracer.start_as_current_span("mcp.match_doctor_hybrid") as span:
+            span.set_attribute("mcp.url", url)
+            span.set_attribute("mcp.params.query", query)
+            if clinic_id:
+                span.set_attribute("mcp.params.clinic_id", clinic_id)
+            if clinic_name:
+                span.set_attribute("mcp.params.clinic_name", clinic_name)
+            
+            payload = await self._request_json(url, params=params, span=span)
+            
+            # Attach a preview of the raw MCP payload for observability in Phoenix
+            try:
+                span.set_attribute(
+                    "mcp.response.preview",
+                    json.dumps(payload, ensure_ascii=False)[:1000],
+                )
+            except Exception:
+                logger.debug("Failed to serialize MCP match payload for preview", exc_info=True)
+            
+            try:
+                result = HybridMatchResponse.model_validate(payload)
+            except ValidationError as exc:
+                raise MCPResponseValidationError(str(exc)) from exc
+            
+            span.set_attribute("mcp.match.status", result.status.value)
+            span.set_attribute("mcp.match.candidates_count", len(result.candidates))
+            if result.best_match:
+                span.set_attribute("mcp.match.best_score", result.best_match.score)
+            
+            return result
+
     async def _request_json(
         self,
         url: str,
@@ -809,33 +838,4 @@ def _tokens_overlap(left: set[str], right: set[str]) -> bool:
             if l_token in r_token or r_token in l_token:
                 return True
     return False
-
-
-def _calculate_similarity(text1: str, text2: str) -> float:
-    """
-    Calculate similarity score between two strings (0-1).
-    Uses multiple strategies for robust matching.
-    """
-    from difflib import SequenceMatcher
-    
-    text1_norm = _normalize_arabic(text1.casefold())
-    text2_norm = _normalize_arabic(text2.casefold())
-    
-    if not text1_norm or not text2_norm:
-        return 0.0
-    
-    scores = []
-    
-    # 1. Sequence matcher (character-level similarity)
-    seq_score = SequenceMatcher(None, text1_norm, text2_norm).ratio()
-    scores.append(seq_score * 0.5)
-    
-    # 2. Word overlap (word-level similarity)
-    words1 = set(text1_norm.split())
-    words2 = set(text2_norm.split())
-    if words1 and words2:
-        overlap = len(words1 & words2) / len(words1 | words2)
-        scores.append(overlap * 0.5)
-    
-    return sum(scores)
 

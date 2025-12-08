@@ -3,16 +3,75 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from config import DAY_NAME_TO_ID, get_settings
 from http_client import fetch_text
+from matching_engine import (
+    compute_order_score,
+    compute_positional_token_weight,
+    normalize_arabic,
+    normalize_english,
+    normalize_mixed_text,
+    tokenize_name,
+)
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
+from rapidfuzz import fuzz
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
+
+
+# ------------------------------------------------------------------------------
+# Pydantic models for hybrid matching
+# ------------------------------------------------------------------------------
+
+class MatchStatus(str, Enum):
+    """Status of a doctor match operation."""
+    UNAMBIGUOUS_MATCH = "UNAMBIGUOUS_MATCH"
+    AMBIGUOUS_NEED_MORE_INFO = "AMBIGUOUS_NEED_MORE_INFO"
+    NO_MATCH = "NO_MATCH"
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
+
+
+class DoctorMatch(BaseModel):
+    """A single doctor match result with scoring details."""
+    provider_id: str
+    clinic_id: str
+    clinic_name: str
+    name_ar: str
+    name_en: str
+    score: float = Field(..., description="Final similarity score (0–1)")
+    token_overlap: float = Field(..., description="Token overlap (0–1)")
+    fuzzy_name_score: float = Field(..., description="Fuzzy full-name score (0–1)")
+    position_score: float = Field(..., description="Positional score (0–1)")
+    matched_by_first_name: bool = Field(..., description="True if first-name was the main match")
+    matched_tokens: List[str] = Field(default_factory=list)
+
+
+class MatchResponse(BaseModel):
+    """Response from the hybrid doctor matching operation."""
+    status: MatchStatus
+    message: str
+    query_tokens: List[str]
+    best_match: Optional[DoctorMatch] = None
+    candidates: List[DoctorMatch] = Field(default_factory=list)
+
+
+class DoctorRecord(BaseModel):
+    """Internal representation of a doctor for matching."""
+    provider_id: str
+    clinic_id: str
+    clinic_name: str
+    name_ar: str
+    name_en: str
+    norm_name_ar: str
+    norm_name_en: str
+    tokens: List[str]
 
 # Create MCP server instance that also powers the HTTP shim
 mcp = FastMCP(
@@ -109,6 +168,378 @@ async def get_service_price(
     )
 
 
+# ------------------------------------------------------------------------------
+# Hybrid Doctor Matching Logic
+# ------------------------------------------------------------------------------
+
+def _parse_and_preprocess_providers(data: List[Dict[str, Any]]) -> List[DoctorRecord]:
+    """Parse provider list response and preprocess for matching."""
+    doctors: List[DoctorRecord] = []
+    for clinic in data:
+        clinic_id = str(clinic.get("clinicId", "")).strip()
+        clinic_name = str(clinic.get("clinicName", "")).strip()
+        for d in clinic.get("doctors", []):
+            provider_id = str(d.get("providerId", "")).strip()
+            if not provider_id:
+                continue
+
+            name_ar = (d.get("DoctorNameA") or "").strip()
+            name_en = (d.get("DoctorNameL") or "").strip()
+
+            norm_ar = normalize_arabic(name_ar)
+            norm_en = normalize_english(name_en)
+
+            tokens = list(
+                dict.fromkeys(
+                    tokenize_name(name_ar) + tokenize_name(name_en)
+                )
+            )
+
+            doctors.append(
+                DoctorRecord(
+                    provider_id=provider_id,
+                    clinic_id=clinic_id,
+                    clinic_name=clinic_name,
+                    name_ar=name_ar,
+                    name_en=name_en,
+                    norm_name_ar=norm_ar,
+                    norm_name_en=norm_en,
+                    tokens=tokens,
+                )
+            )
+    return doctors
+
+
+def _filter_candidates(
+    doctors: List[DoctorRecord],
+    clinic_id: Optional[str],
+    clinic_name: Optional[str],
+) -> List[DoctorRecord]:
+    """Filter doctor candidates by clinic ID or name."""
+    candidates = doctors
+    if clinic_id:
+        cid = clinic_id.strip()
+        candidates = [d for d in candidates if d.clinic_id == cid]
+    if clinic_name:
+        norm_c = normalize_mixed_text(clinic_name)
+        candidates = [
+            d
+            for d in candidates
+            if norm_c in normalize_mixed_text(d.clinic_name)
+        ]
+    return candidates
+
+
+def _match_single_token(
+    token: str,
+    candidates: List[DoctorRecord],
+    top_k: int,
+    min_score: float,
+) -> MatchResponse:
+    """Match a single-token query against doctor candidates."""
+    scored: List[DoctorMatch] = []
+
+    for d in candidates:
+        pos_score, matched_first = compute_positional_token_weight(token, d.tokens)
+        if pos_score < min_score:
+            continue
+
+        # Fuzzy full-name similarity (Arabic & English)
+        q_str = token
+        full_ar = d.norm_name_ar or d.name_ar
+        full_en = d.norm_name_en or d.name_en
+
+        fuzzy_ar = fuzz.ratio(q_str, full_ar) / 100.0 if full_ar else 0.0
+        fuzzy_en = fuzz.ratio(q_str, full_en) / 100.0 if full_en else 0.0
+        fuzzy_name_score = max(fuzzy_ar, fuzzy_en)
+
+        # Overlap is binary in single-token (hit or miss)
+        token_overlap = 1.0 if pos_score > 0 else 0.0
+
+        # Final score: position is dominant here
+        final_score = 0.6 * pos_score + 0.4 * fuzzy_name_score
+
+        scored.append(
+            DoctorMatch(
+                provider_id=d.provider_id,
+                clinic_id=d.clinic_id,
+                clinic_name=d.clinic_name,
+                name_ar=d.name_ar,
+                name_en=d.name_en,
+                score=round(final_score, 4),
+                token_overlap=round(token_overlap, 4),
+                fuzzy_name_score=round(fuzzy_name_score, 4),
+                position_score=round(pos_score, 4),
+                matched_by_first_name=matched_first,
+                matched_tokens=[token],
+            )
+        )
+
+    if not scored:
+        return MatchResponse(
+            status=MatchStatus.NO_MATCH,
+            message="لم يتم العثور على دكتور بهذا الاسم.",
+            query_tokens=[token],
+            candidates=[],
+        )
+
+    # Sort by score, then prefer first-name matches as tie-breaker
+    scored.sort(
+        key=lambda m: (m.score, 1 if m.matched_by_first_name else 0),
+        reverse=True,
+    )
+
+    top_matches = scored[:top_k]
+    first_name_matches = [m for m in top_matches if m.matched_by_first_name]
+
+    # Case 1: exactly one strong first-name match
+    if len(first_name_matches) == 1 and first_name_matches[0].score >= 0.8:
+        best = first_name_matches[0]
+        return MatchResponse(
+            status=MatchStatus.UNAMBIGUOUS_MATCH,
+            message=f"تم العثور على دكتور واحد مطابق للاسم '{token}'.",
+            query_tokens=[token],
+            best_match=best,
+            candidates=top_matches,
+        )
+
+    # Case 2: multiple first-name matches → ask for more info
+    if len(first_name_matches) >= 2:
+        return MatchResponse(
+            status=MatchStatus.AMBIGUOUS_NEED_MORE_INFO,
+            message=(
+                f"يوجد أكثر من دكتور يبدأ اسمه بـ '{token}'. "
+                f"من فضلك اكتب اسم الدكتور مكوّن من اسمين (مثال: {token} + الاسم التاني)."
+            ),
+            query_tokens=[token],
+            candidates=top_matches,
+        )
+
+    # Case 3: only last/middle name matches → ask user to clarify
+    return MatchResponse(
+        status=MatchStatus.AMBIGUOUS_NEED_MORE_INFO,
+        message=(
+            f"وجدت دكاترة يحملون '{token}' كجزء من الاسم "
+            f"وليس كأول اسم. من فضلك اكتب اسمين أوضح للدكتور."
+        ),
+        query_tokens=[token],
+        candidates=top_matches,
+    )
+
+
+def _match_multi_token(
+    query_tokens: List[str],
+    candidates: List[DoctorRecord],
+    top_k: int,
+    min_score: float,
+) -> MatchResponse:
+    """Match a multi-token query against doctor candidates."""
+    q_string = " ".join(query_tokens)
+    scored: List[DoctorMatch] = []
+
+    for d in candidates:
+        # 1) Token overlap using fuzzy token comparison
+        overlap_count = 0
+        matched_tokens: List[str] = []
+        for qt in query_tokens:
+            best_token_score = 0.0
+            for dt in d.tokens:
+                s = fuzz.ratio(qt, dt) / 100.0
+                if s > best_token_score:
+                    best_token_score = s
+            if best_token_score >= 0.85:
+                overlap_count += 1
+                matched_tokens.append(qt)
+        token_overlap = overlap_count / len(query_tokens)
+
+        # 2) Positional score: average positional weight over tokens
+        positional_scores: List[float] = []
+        any_first = False
+        for qt in query_tokens:
+            pos_score, matched_first = compute_positional_token_weight(qt, d.tokens)
+            positional_scores.append(pos_score)
+            any_first = any_first or matched_first
+        avg_pos_score = (
+            sum(positional_scores) / len(positional_scores)
+            if positional_scores
+            else 0.0
+        )
+
+        # 3) Ordered sequence score
+        order_score = compute_order_score(query_tokens, d.tokens)
+
+        # 4) Fuzzy full-name similarity
+        full_ar = d.norm_name_ar or d.name_ar
+        full_en = d.norm_name_en or d.name_en
+
+        fuzzy_ar = fuzz.ratio(q_string, full_ar) / 100.0 if full_ar else 0.0
+        fuzzy_en = fuzz.ratio(q_string, full_en) / 100.0 if full_en else 0.0
+        fuzzy_name_score = max(fuzzy_ar, fuzzy_en)
+
+        # Final score (tunable weights)
+        final_score = (
+            0.35 * token_overlap
+            + 0.25 * avg_pos_score
+            + 0.2 * order_score
+            + 0.2 * fuzzy_name_score
+        )
+
+        if final_score < min_score:
+            continue
+
+        scored.append(
+            DoctorMatch(
+                provider_id=d.provider_id,
+                clinic_id=d.clinic_id,
+                clinic_name=d.clinic_name,
+                name_ar=d.name_ar,
+                name_en=d.name_en,
+                score=round(final_score, 4),
+                token_overlap=round(token_overlap, 4),
+                fuzzy_name_score=round(fuzzy_name_score, 4),
+                position_score=round(max(avg_pos_score, order_score), 4),
+                matched_by_first_name=any_first,
+                matched_tokens=matched_tokens,
+            )
+        )
+
+    if not scored:
+        return MatchResponse(
+            status=MatchStatus.NO_MATCH,
+            message="لم يتم العثور على دكتور بهذا الاسم.",
+            query_tokens=query_tokens,
+            candidates=[],
+        )
+
+    # Sort by score descending; tie-break: more matched tokens, then first-name usage
+    scored.sort(
+        key=lambda m: (m.score, len(m.matched_tokens), 1 if m.matched_by_first_name else 0),
+        reverse=True,
+    )
+
+    top_matches = scored[:top_k]
+    best = top_matches[0]
+
+    # Decide ambiguity vs unambiguous
+    if len(top_matches) == 1 or (
+        len(top_matches) > 1
+        and best.score >= 0.8
+        and (best.score - top_matches[1].score) >= 0.1
+    ):
+        return MatchResponse(
+            status=MatchStatus.UNAMBIGUOUS_MATCH,
+            message="تم العثور على دكتور مطابق للاسم الذي أدخلته.",
+            query_tokens=query_tokens,
+            best_match=best,
+            candidates=top_matches,
+        )
+
+    # Multiple close matches → ambiguous
+    return MatchResponse(
+        status=MatchStatus.AMBIGUOUS_NEED_MORE_INFO,
+        message=(
+            "يوجد أكثر من دكتور بنفس الاسم أو قريب منه. "
+            "من فضلك تأكد من الاسم الكامل أو اكتب التخصص أو العيادة لتحديد الدكتور بدقة."
+        ),
+        query_tokens=query_tokens,
+        best_match=best,
+        candidates=top_matches,
+    )
+
+
+@mcp.tool()
+async def match_doctor_hybrid(
+    query: str,
+    clinic_id: Optional[str] = None,
+    clinic_name: Optional[str] = None,
+    top_k: int = 5,
+    min_score_multi: float = 0.6,
+    min_score_single: float = 0.55,
+) -> str:
+    """Match a doctor name using hybrid token-based and fuzzy matching.
+    
+    This tool provides advanced doctor name matching with support for:
+    - Arabic and English names
+    - Partial name matching (first name, last name, etc.)
+    - Positional weighting (first name matches score higher)
+    - Fuzzy matching for typos and variations
+    
+    Parameters:
+        query (str, required): User text containing doctor name or partial name
+        clinic_id (str, optional): Filter by exact clinic ID
+        clinic_name (str, optional): Filter by clinic name (partial match supported)
+        top_k (int, optional): Maximum number of candidates to return (default: 5)
+        min_score_multi (float, optional): Minimum score for multi-token matches (default: 0.6)
+        min_score_single (float, optional): Minimum score for single-token matches (default: 0.55)
+    
+    Returns:
+        JSON response containing:
+        - status: UNAMBIGUOUS_MATCH, AMBIGUOUS_NEED_MORE_INFO, or NO_MATCH
+        - message: Human-readable message in Arabic
+        - query_tokens: Tokenized query
+        - best_match: Best matching doctor (if found)
+        - candidates: List of candidate matches with scores
+    """
+    # Fetch provider list
+    raw_data = await fetch_text(
+        settings.provider_list_url,
+        auth=settings.auth,
+    )
+    payload = json.loads(raw_data)
+    
+    if "data" not in payload:
+        return json.dumps({
+            "status": MatchStatus.NO_MATCH.value,
+            "message": "خطأ في جلب بيانات الدكاترة من النظام.",
+            "query_tokens": [],
+            "best_match": None,
+            "candidates": [],
+        }, ensure_ascii=False)
+    
+    # Parse and preprocess doctors
+    doctors = _parse_and_preprocess_providers(payload["data"])
+    
+    # Tokenize query
+    query_tokens = tokenize_name(query)
+    
+    # Filter by clinic if specified
+    candidates = _filter_candidates(doctors, clinic_id, clinic_name)
+    
+    if not candidates:
+        response = MatchResponse(
+            status=MatchStatus.NO_MATCH,
+            message="لا يوجد دكاترة في هذا التخصص/العيادة.",
+            query_tokens=query_tokens,
+        )
+        return response.model_dump_json(by_alias=True)
+    
+    if not query_tokens:
+        response = MatchResponse(
+            status=MatchStatus.NO_MATCH,
+            message="لم أستطع فهم اسم الدكتور. من فضلك اكتب اسم الدكتور.",
+            query_tokens=query_tokens,
+        )
+        return response.model_dump_json(by_alias=True)
+    
+    # Choose matching strategy based on token count
+    if len(query_tokens) == 1:
+        response = _match_single_token(
+            query_tokens[0],
+            candidates,
+            top_k=top_k,
+            min_score=min_score_single,
+        )
+    else:
+        response = _match_multi_token(
+            query_tokens,
+            candidates,
+            top_k=top_k,
+            min_score=min_score_multi,
+        )
+    
+    return response.model_dump_json(by_alias=True)
+
+
 def _json_response_from_text(payload: str) -> Response:
     """Return JSONResponse when possible, otherwise fall back to plain text."""
     try:
@@ -176,6 +607,53 @@ async def providers_pricing_route(request: Request) -> Response:
     data = await get_service_price(
         clinicid=clinic_id,
         providerid=provider_id,
+    )
+    return _json_response_from_text(data)
+
+
+@mcp.custom_route("/providers/match", methods=["GET", "POST"])
+async def providers_match_route(request: Request) -> Response:
+    """HTTP route for hybrid doctor matching."""
+    # Support both GET (query params) and POST (JSON body)
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            query = body.get("query", "")
+            clinic_id = body.get("clinic_id")
+            clinic_name = body.get("clinic_name")
+            top_k = body.get("top_k", 5)
+            min_score_multi = body.get("min_score_multi", 0.6)
+            min_score_single = body.get("min_score_single", 0.55)
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    else:
+        params = request.query_params
+        query = params.get("query", "")
+        clinic_id = params.get("clinic_id") or params.get("clinicid")
+        clinic_name = params.get("clinic_name") or params.get("clinicname")
+        try:
+            top_k = int(params.get("top_k", "5"))
+        except ValueError:
+            top_k = 5
+        try:
+            min_score_multi = float(params.get("min_score_multi", "0.6"))
+        except ValueError:
+            min_score_multi = 0.6
+        try:
+            min_score_single = float(params.get("min_score_single", "0.55"))
+        except ValueError:
+            min_score_single = 0.55
+    
+    if not query:
+        return JSONResponse({"error": "query parameter is required"}, status_code=400)
+    
+    data = await match_doctor_hybrid(
+        query=query,
+        clinic_id=clinic_id,
+        clinic_name=clinic_name,
+        top_k=top_k,
+        min_score_multi=min_score_multi,
+        min_score_single=min_score_single,
     )
     return _json_response_from_text(data)
 
