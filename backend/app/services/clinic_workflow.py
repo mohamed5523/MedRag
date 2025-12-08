@@ -325,7 +325,17 @@ class ClinicWorkflowService:
                 span.set_attribute("match.status", match_response.status.value)
                 span.set_attribute("match.candidates_count", len(match_response.candidates))
                 
-                if match_response.status == HybridMatchStatus.UNAMBIGUOUS_MATCH and match_response.best_match:
+                if match_response.status == HybridMatchStatus.UNAMBIGUOUS_MATCH:
+                    # Validate that best_match is present for UNAMBIGUOUS_MATCH
+                    if not match_response.best_match:
+                        logger.error(
+                            "MCP returned UNAMBIGUOUS_MATCH without best_match object - invalid response"
+                        )
+                        raise MCPWorkflowError(
+                            "حصل خطأ في نظام البحث. من فضلك حاول تاني.",
+                            reason="invalid_match_response",
+                        )
+                    
                     # Clear match found - use it
                     best = match_response.best_match
                     logger.info(f"Hybrid match found: {best.name_ar or best.name_en} (score: {best.score:.2f})")
@@ -368,6 +378,33 @@ class ClinicWorkflowService:
                     raise MCPWorkflowError(
                         match_response.message or "ملقتش دكتور بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
                         reason="provider_not_found",
+                    )
+                    
+                elif match_response.status == HybridMatchStatus.LOW_CONFIDENCE:
+                    # Low confidence match - treat similar to ambiguous, ask for clarification
+                    alt_names = [
+                        candidate.name_ar or candidate.name_en
+                        for candidate in match_response.candidates[:3]
+                    ]
+                    if alt_names:
+                        raise MCPWorkflowError(
+                            f"مش متأكد من الاسم. هل تقصد: {' أو '.join(alt_names)}؟",
+                            reason="provider_low_confidence",
+                        )
+                    else:
+                        raise MCPWorkflowError(
+                            match_response.message or "ملقتش دكتور بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
+                            reason="provider_low_confidence",
+                        )
+                        
+                else:
+                    # Unknown/unexpected status - log and raise error
+                    logger.error(
+                        f"MCP returned unexpected match status: {match_response.status}"
+                    )
+                    raise MCPWorkflowError(
+                        "حصل خطأ في نظام البحث. من فضلك حاول تاني.",
+                        reason="unexpected_match_status",
                     )
 
         # If we have a clinic name but no doctor (or doctor resolution gave us clinic info)
