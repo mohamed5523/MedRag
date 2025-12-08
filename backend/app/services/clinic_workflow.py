@@ -330,17 +330,21 @@ class ClinicWorkflowService:
                     best = match_response.best_match
                     logger.info(f"Hybrid match found: {best.name_ar or best.name_en} (score: {best.score:.2f})")
                     
+                    # Safely convert string IDs to integers, handling non-numeric values
+                    parsed_provider_id = _safe_parse_int(best.provider_id)
+                    parsed_clinic_id = _safe_parse_int(best.clinic_id)
+                    
                     # Convert DoctorMatchResult to ProviderRecord for compatibility
                     provider_entry = ProviderRecord(
-                        provider_id=int(best.provider_id) if best.provider_id else None,
-                        clinic_id=int(best.clinic_id) if best.clinic_id else None,
+                        provider_id=parsed_provider_id,
+                        clinic_id=parsed_clinic_id,
                         provider_name_ar=best.name_ar,
                         provider_name_en=best.name_en,
                         clinic_name_ar=best.clinic_name,
                         clinic_name_en=best.clinic_name,
                     )
-                    clinic_id = int(best.clinic_id) if best.clinic_id else None
-                    provider_id = int(best.provider_id) if best.provider_id else None
+                    clinic_id = parsed_clinic_id
+                    provider_id = parsed_provider_id
                     
                 elif match_response.status == HybridMatchStatus.AMBIGUOUS_NEED_MORE_INFO:
                     # Multiple matches - ask user for clarification
@@ -394,6 +398,37 @@ class ClinicWorkflowService:
                 )
 
         return clinic_id, provider_id, provider_entry
+
+
+def _safe_parse_int(value: Any) -> Optional[int]:
+    """
+    Safely parse a value to int, returning None for invalid/non-numeric values.
+    
+    Handles cases where the MCP server returns:
+    - None or empty string
+    - String "None" or "null"
+    - Non-numeric strings
+    - Valid numeric strings or integers
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        # Handle string representations of null/None
+        if value.strip().lower() in ("", "none", "null"):
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            logger.warning(f"Failed to parse '{value}' as integer, returning None")
+            return None
+    # For any other type, try conversion
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        logger.warning(f"Failed to parse '{value}' (type: {type(value).__name__}) as integer, returning None")
+        return None
 
 
 def _infer_doctor_from_text(text: str) -> Optional[str]:

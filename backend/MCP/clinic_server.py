@@ -499,24 +499,26 @@ async def match_doctor_hybrid(
     # Parse and preprocess doctors
     doctors = _parse_and_preprocess_providers(payload["data"])
     
-    # Tokenize query
+    # Tokenize query FIRST - check if we can parse the doctor name before filtering
     query_tokens = tokenize_name(query)
     
-    # Filter by clinic if specified
+    # Check query tokenization before filtering by clinic
+    # This ensures users get accurate error feedback about the actual problem
+    if not query_tokens:
+        response = MatchResponse(
+            status=MatchStatus.NO_MATCH,
+            message="لم أستطع فهم اسم الدكتور. من فضلك اكتب اسم الدكتور.",
+            query_tokens=query_tokens,
+        )
+        return response.model_dump_json(by_alias=True)
+    
+    # Filter by clinic if specified (after validating query)
     candidates = _filter_candidates(doctors, clinic_id, clinic_name)
     
     if not candidates:
         response = MatchResponse(
             status=MatchStatus.NO_MATCH,
             message="لا يوجد دكاترة في هذا التخصص/العيادة.",
-            query_tokens=query_tokens,
-        )
-        return response.model_dump_json(by_alias=True)
-    
-    if not query_tokens:
-        response = MatchResponse(
-            status=MatchStatus.NO_MATCH,
-            message="لم أستطع فهم اسم الدكتور. من فضلك اكتب اسم الدكتور.",
             query_tokens=query_tokens,
         )
         return response.model_dump_json(by_alias=True)
@@ -611,6 +613,30 @@ async def providers_pricing_route(request: Request) -> Response:
     return _json_response_from_text(data)
 
 
+def _safe_int(value: Any, default: int) -> int:
+    """Safely convert a value to int, returning default on failure."""
+    if value is None:
+        return default
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_float(value: Any, default: float) -> float:
+    """Safely convert a value to float, returning default on failure."""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 @mcp.custom_route("/providers/match", methods=["GET", "POST"])
 async def providers_match_route(request: Request) -> Response:
     """HTTP route for hybrid doctor matching."""
@@ -621,9 +647,10 @@ async def providers_match_route(request: Request) -> Response:
             query = body.get("query", "")
             clinic_id = body.get("clinic_id")
             clinic_name = body.get("clinic_name")
-            top_k = body.get("top_k", 5)
-            min_score_multi = body.get("min_score_multi", 0.6)
-            min_score_single = body.get("min_score_single", 0.55)
+            # Safely convert numeric parameters with defaults
+            top_k = _safe_int(body.get("top_k"), 5)
+            min_score_multi = _safe_float(body.get("min_score_multi"), 0.6)
+            min_score_single = _safe_float(body.get("min_score_single"), 0.55)
         except Exception:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
     else:
@@ -631,18 +658,9 @@ async def providers_match_route(request: Request) -> Response:
         query = params.get("query", "")
         clinic_id = params.get("clinic_id") or params.get("clinicid")
         clinic_name = params.get("clinic_name") or params.get("clinicname")
-        try:
-            top_k = int(params.get("top_k", "5"))
-        except ValueError:
-            top_k = 5
-        try:
-            min_score_multi = float(params.get("min_score_multi", "0.6"))
-        except ValueError:
-            min_score_multi = 0.6
-        try:
-            min_score_single = float(params.get("min_score_single", "0.55"))
-        except ValueError:
-            min_score_single = 0.55
+        top_k = _safe_int(params.get("top_k"), 5)
+        min_score_multi = _safe_float(params.get("min_score_multi"), 0.6)
+        min_score_single = _safe_float(params.get("min_score_single"), 0.55)
     
     if not query:
         return JSONResponse({"error": "query parameter is required"}, status_code=400)
