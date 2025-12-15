@@ -10,7 +10,7 @@ COPY requirements.txt .
 RUN uv pip install --system --no-cache -r requirements.txt
 
 # Copy your app code
-COPY clinic_server.py config.py http_client.py ./
+COPY clinic_server.py config.py http_client.py matching_engine.py ./
 COPY .env* ./
 
 EXPOSE 8000

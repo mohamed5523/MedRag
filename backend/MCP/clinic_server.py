@@ -225,7 +225,10 @@ def _filter_candidates(
         candidates = [
             d
             for d in candidates
+            # Bidirectional substring match: handles cases like
+            # "عيادة نسا وتوليد" vs "نسا وتوليد"
             if norm_c in normalize_mixed_text(d.clinic_name)
+               or normalize_mixed_text(d.clinic_name) in norm_c
         ]
     return candidates
 
