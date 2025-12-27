@@ -3,7 +3,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, List, Literal, Optional
+from typing import Any, ClassVar, List, Literal, Optional, Tuple
 
 from opentelemetry import trace
 
@@ -59,6 +59,15 @@ class ShortTermMemoryStore:
         self.max_messages = int(max_messages)
         self.ttl_policy: TTLPolicy = ttl_policy
         self.redis = redis_client.client
+
+        # Process-local fallback for pending actions if Redis is temporarily unavailable.
+        # This is best-effort only (won't survive restarts / multi-instance), but prevents
+        # silent loss of disambiguation context during transient Redis issues.
+        # {session_id: (expires_at_epoch_seconds, payload_dict)}
+        if not hasattr(self.__class__, "_pending_action_local"):
+            self.__class__._pending_action_local = {}
+
+    _pending_action_local: ClassVar[dict[str, Tuple[float, dict[str, Any]]]]
 
     # Key helpers
     def _k_messages(self, session_id: str) -> str:
@@ -253,33 +262,68 @@ class ShortTermMemoryStore:
         Stored as JSON with the same TTL as the session keys.
         """
         k = self._k_pending_action(session_id)
+        ok = False
         try:
-            redis_client.set(k, payload, ex=self.session_ttl_seconds)
+            ok = bool(redis_client.set(k, payload, ex=self.session_ttl_seconds))
         except Exception as e:
             logger.error(f"Redis error saving pending_action for session {session_id[:16]}...: {e}")
+            ok = False
+
+        if not ok:
+            expires_at = time.time() + float(self.session_ttl_seconds)
+            self.__class__._pending_action_local[session_id] = (expires_at, payload)
+            logger.warning(
+                "Pending action saved to local fallback (Redis unavailable) for session %s...",
+                session_id[:16],
+            )
 
     def get_pending_action(self, session_id: str) -> Optional[dict[str, Any]]:
         """Retrieve the pending action for the session (if any)."""
         k = self._k_pending_action(session_id)
         try:
             raw = redis_client.get(k)
-            if not raw:
-                return None
-            if isinstance(raw, str):
-                return json.loads(raw)
-            # decode_responses=True should always yield str, but keep this safe
-            return json.loads(str(raw))
+            if raw:
+                if isinstance(raw, str):
+                    return json.loads(raw)
+                # decode_responses=True should always yield str, but keep this safe
+                return json.loads(str(raw))
         except Exception as e:
             logger.error(f"Redis error getting pending_action for session {session_id[:16]}...: {e}")
+
+        # Fallback to in-process store (if present and not expired)
+        local = self.__class__._pending_action_local.get(session_id)
+        if not local:
             return None
+        expires_at, payload = local
+        if time.time() >= expires_at:
+            self.__class__._pending_action_local.pop(session_id, None)
+            return None
+        return payload
 
     def clear_pending_action(self, session_id: str) -> None:
         """Remove any pending action for the session."""
         k = self._k_pending_action(session_id)
+        deleted = 0
         try:
-            redis_client.delete(k)
+            deleted = int(redis_client.delete(k))
         except Exception as e:
             logger.error(f"Redis error clearing pending_action for session {session_id[:16]}...: {e}")
+            deleted = 0
+
+        # Always clear local fallback
+        self.__class__._pending_action_local.pop(session_id, None)
+
+        # If Redis delete failed (0 could also mean key missing), log only if key seems to still exist.
+        if deleted == 0:
+            try:
+                if redis_client.exists(k):
+                    logger.warning(
+                        "Failed to clear pending_action in Redis for session %s... (key still exists).",
+                        session_id[:16],
+                    )
+            except Exception:
+                # ignore secondary errors
+                pass
 
     def exists(self, session_id: str) -> bool:
         """Check if session exists."""
