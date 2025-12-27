@@ -9,6 +9,11 @@ from fastapi import APIRouter, Header, HTTPException
 from opentelemetry import trace
 
 from ..core.conversation_memory import short_term_memory
+from ..core.conversation_controller import (
+    infer_specialty_from_symptoms,
+    is_symptom_triage_request,
+    resolve_pending_action,
+)
 from ..core.intent_router import RouteMode, route_conversation
 from ..core.qa_engine import QAEngine
 from ..core.session_manager import session_manager
@@ -24,6 +29,8 @@ logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.chat")
 ARABIC_HYBRID_ALPHA = float(os.getenv("HYBRID_ALPHA_ARABIC", "0.75"))
+ENABLE_PENDING_ACTION = os.getenv("ENABLE_PENDING_ACTION", "true").strip().lower() not in {"0", "false", "no"}
+ENABLE_SYMPTOM_TRIAGE = os.getenv("ENABLE_SYMPTOM_TRIAGE", "true").strip().lower() not in {"0", "false", "no"}
 
 router = APIRouter()
 
@@ -38,6 +45,51 @@ except Exception as e:
     tts_service = None
 
 clinic_workflow = ClinicWorkflowService()
+
+def _materialize_intent_query(intent: str, *, doctor_name: str | None = None, clinic_name: str | None = None) -> str:
+    """Create a full query string from a sticky intent + resolved entities."""
+    doctor = (doctor_name or "").strip()
+    clinic = (clinic_name or "").strip()
+    if intent == "ask_price":
+        if doctor and clinic:
+            return f"سعر الكشف عند الدكتور {doctor} في {clinic}"
+        if doctor:
+            return f"سعر الكشف عند الدكتور {doctor}"
+        if clinic:
+            return f"سعر الكشف في {clinic}"
+        return "سعر الكشف"
+    if intent in {"check_availability", "book_appointment"}:
+        if doctor and clinic:
+            return f"مواعيد الدكتور {doctor} في {clinic}"
+        if doctor:
+            return f"مواعيد الدكتور {doctor}"
+        if clinic:
+            return f"مواعيد {clinic}"
+        return "المواعيد"
+    if intent == "list_doctors":
+        if clinic:
+            return f"اسماء الأطباء في {clinic}"
+        return "اسماء الأطباء"
+    # fallback
+    if doctor:
+        return f"{intent} عند الدكتور {doctor}"
+    return intent or "استفسار"
+
+
+def _format_provider_disambiguation_prompt(candidates: list[dict]) -> str:
+    """Build a numbered selection prompt for provider disambiguation."""
+    names: list[str] = []
+    for c in candidates[:5]:
+        name = (c.get("name_ar") or c.get("name_en") or "").strip()
+        if name:
+            names.append(name)
+    if not names:
+        return "فيه أكتر من دكتور بنفس الاسم. ممكن تكتب الاسم كامل؟"
+    parts = ["فيه أكتر من دكتور بنفس الاسم. اختار رقم من دول"]
+    for i, n in enumerate(names, start=1):
+        parts.append(f"{i} {n}")
+    parts.append("اكتب رقم الاختيار أو اكتب الاسم كامل")
+    return " ".join(parts).strip()
 
 
 async def _maybe_generate_audio(text: str) -> tuple[Optional[str], Optional[int], bool]:
@@ -351,9 +403,77 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 for m in history
                 if m.content
             ]
+
+            # ------------------------------------------------------------------
+            # Conversation Controller: pending_action (disambiguation / triage)
+            # ------------------------------------------------------------------
+            pending_action = None
+            forced_intent: Optional[str] = None
+            forced_doctor: Optional[str] = None
+            forced_clinic: Optional[str] = None
+            forced_specialty: Optional[str] = None
+            state_input_query = request.query
+
+            if ENABLE_PENDING_ACTION:
+                pending_action = short_term_memory.get_pending_action(session_id)
+                if pending_action:
+                    root_span.set_attribute("pending_action.type", pending_action.get("type", ""))
+                    root_span.set_attribute("pending_action.intent", pending_action.get("intent", ""))
+
+                    resolution = resolve_pending_action(request.query, pending_action)
+                    if resolution:
+                        short_term_memory.clear_pending_action(session_id)
+                        root_span.set_attribute("pending_action.resolved", True)
+
+                        forced_intent = str(resolution.get("intent") or "").strip() or None
+
+                        if pending_action.get("type") == "provider_disambiguation":
+                            selected = resolution.get("selected") or {}
+                            if isinstance(selected, dict):
+                                forced_doctor = (selected.get("name_ar") or selected.get("name_en") or "").strip() or None
+                                forced_clinic = (selected.get("clinic_name") or "").strip() or None
+                            # Build a full query to stabilize state extraction + tool selection
+                            if forced_intent and forced_doctor:
+                                state_input_query = _materialize_intent_query(
+                                    forced_intent, doctor_name=forced_doctor, clinic_name=forced_clinic
+                                )
+
+                        elif pending_action.get("type") == "symptom_triage":
+                            forced_intent = "list_doctors"
+                            forced_specialty = str(resolution.get("specialty") or "").strip() or None
+                            state_input_query = str(resolution.get("combined_query") or request.query)
+                    else:
+                        # Not resolved: re-prompt without re-running ambiguous MCP logic
+                        turns_remaining = int(pending_action.get("turns_remaining") or 2) - 1
+                        pending_action["turns_remaining"] = turns_remaining
+                        if turns_remaining <= 0:
+                            short_term_memory.clear_pending_action(session_id)
+                            prompt = "ممكن تكتب الاسم كامل عشان أقدر أحدد الدكتور أو العيادة صح؟"
+                        else:
+                            short_term_memory.save_pending_action(session_id, pending_action)
+                            if pending_action.get("type") == "provider_disambiguation":
+                                prompt = _format_provider_disambiguation_prompt(
+                                    list(pending_action.get("candidates") or [])
+                                )
+                            else:
+                                prompt = "قولي الألم فين بالظبط وهل فيه سخونية أو قيء؟"
+
+                        short_term_memory.add_message(session_id, "assistant", prompt)
+                        audio_data, audio_size, has_audio = await _maybe_generate_audio(prompt)
+                        return ChatResponseWithAudio(
+                            answer=prompt,
+                            sources=[],
+                            context_count=0,
+                            model_used=qa_engine.model,
+                            tokens_used=0,
+                            audio_data=audio_data,
+                            audio_size=audio_size,
+                            has_audio=has_audio,
+                            error="pending_action",
+                        )
             
             with tracer.start_as_current_span("extract_state") as span:
-                new_state = state_manager.extract_state(request.query, history_dicts, previous_state)
+                new_state = state_manager.extract_state(state_input_query, history_dicts, previous_state)
 
                 short_term_memory.save_state(session_id, new_state)
                 
@@ -361,6 +481,56 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 
                 span.set_attribute("state.intent", new_state.intent)
                 span.set_attribute("query.rewritten_state", rewritten_query_from_state)
+
+            # Apply forced entities/intent from pending_action resolution (post-extract)
+            if forced_intent:
+                new_state.intent = forced_intent
+            if forced_doctor:
+                new_state.entities.doctor = forced_doctor
+                new_state.target_entity_type = "doctor"
+            if forced_clinic:
+                new_state.entities.clinic = forced_clinic
+                if new_state.target_entity_type == "unknown":
+                    new_state.target_entity_type = "clinic"
+            if forced_specialty:
+                new_state.entities.specialty = forced_specialty
+
+            # Symptom triage (Option A): route "اروح لمين" symptom queries to MCP list_doctors
+            if ENABLE_SYMPTOM_TRIAGE and not pending_action and is_symptom_triage_request(request.query):
+                specialty = infer_specialty_from_symptoms(request.query)
+                if not specialty:
+                    # Ask one clarifying question and keep a pending_action so next turn doesn't fall to RAG
+                    triage_pending = {
+                        "type": "symptom_triage",
+                        "intent": "list_doctors",
+                        "turns_remaining": 2,
+                        "original_question": request.query,
+                    }
+                    short_term_memory.save_pending_action(session_id, triage_pending)
+                    prompt = "تمام قولي الألم فين بالظبط وهل فيه سخونية أو قيء؟"
+                    short_term_memory.add_message(session_id, "assistant", prompt)
+                    audio_data, audio_size, has_audio = await _maybe_generate_audio(prompt)
+                    return ChatResponseWithAudio(
+                        answer=prompt,
+                        sources=[],
+                        context_count=0,
+                        model_used=qa_engine.model,
+                        tokens_used=0,
+                        audio_data=audio_data,
+                        audio_size=audio_size,
+                        has_audio=has_audio,
+                        error="symptom_triage_clarify",
+                    )
+
+                # Force list_doctors using inferred specialty
+                new_state.intent = "list_doctors"
+                new_state.entities.specialty = specialty
+                new_state.entities.doctor = None  # avoid doctor-specific workflows
+                new_state.target_entity_type = "clinic"
+
+                # Update rewrite baseline so retrieval/generation sees consistent query
+                rewritten_query_from_state = state_manager.rewrite_query(new_state)
+                short_term_memory.save_state(session_id, new_state)
 
             decision = route_conversation(new_state, request.query)
             root_span.set_attribute("routing.intent", decision.intent)
@@ -414,12 +584,45 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                     workflow_result = await clinic_workflow.run(
                         decision=decision,
                         state=new_state,
-                        question=request.query,
+                        question=state_input_query,
                         qa_engine=qa_engine,
                         chat_history=history_payload,
                     )
                 except (MCPWorkflowError, MCPClientError) as workflow_error:
                     fallback_reason = getattr(workflow_error, "reason", "mcp_client_error")
+
+                    # Convert ambiguous/low-confidence provider match into a numbered disambiguation flow
+                    if (
+                        ENABLE_PENDING_ACTION
+                        and isinstance(workflow_error, MCPWorkflowError)
+                        and fallback_reason in {"provider_ambiguous", "provider_low_confidence"}
+                        and getattr(workflow_error, "data", None)
+                        and (workflow_error.data.get("candidates") or [])
+                    ):
+                        candidates = list(workflow_error.data.get("candidates") or [])
+                        pending = {
+                            "type": "provider_disambiguation",
+                            "intent": decision.intent,
+                            "turns_remaining": 2,
+                            "original_question": state_input_query,
+                            "candidates": candidates,
+                        }
+                        short_term_memory.save_pending_action(session_id, pending)
+                        prompt = _format_provider_disambiguation_prompt(candidates)
+                        short_term_memory.add_message(session_id, "assistant", prompt)
+                        audio_data, audio_size, has_audio = await _maybe_generate_audio(prompt)
+                        return ChatResponseWithAudio(
+                            answer=prompt,
+                            sources=[],
+                            context_count=0,
+                            model_used=qa_engine.model,
+                            tokens_used=0,
+                            audio_data=audio_data,
+                            audio_size=audio_size,
+                            has_audio=has_audio,
+                            error=fallback_reason,
+                        )
+
                     root_span.add_event(
                         "routing.mcp.failed",
                         {

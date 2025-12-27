@@ -24,7 +24,7 @@ def test_mcp_route_for_pricing_intent():
 
     assert decision.mode == RouteMode.MCP
     assert decision.tool_sequence
-    assert decision.reason.startswith("Intent is covered")
+    assert decision.intent == "ask_price"
 
 
 def test_hospital_queries_force_rag():
@@ -37,5 +37,5 @@ def test_hospital_queries_force_rag():
     decision = route_conversation(state, "مستشفى السلام فيها أي خدمات؟")
 
     assert decision.mode == RouteMode.RAG
-    assert decision.reason.startswith("Hospital-related")
+    assert decision.intent == "hospital_info"
 

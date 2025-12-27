@@ -4,7 +4,13 @@ import pytest
 
 from app.core.intent_router import RouteDecision, RouteMode
 from app.core.state_manager import ConversationState, Entities
-from app.integrations.mcp_client import ProviderRecord, ServicePriceResponse
+from app.integrations.mcp_client import (
+    DoctorMatchResult,
+    HybridMatchResponse,
+    HybridMatchStatus,
+    ProviderRecord,
+    ServicePriceResponse,
+)
 from app.services.clinic_workflow import ClinicWorkflowService, MCPWorkflowError
 
 
@@ -19,7 +25,7 @@ class FakeQAEngine:
             "time_context_message": "stub",
         }
 
-    def answer_question(self, *, question, contexts, time_context, chat_history=None):
+    async def answer_question(self, *, question, contexts, time_context, chat_history=None):
         self.last_question = question
         self.last_contexts = contexts
         return {
@@ -34,6 +40,36 @@ class FakeQAEngine:
 class FakeMCPClient:
     def __init__(self):
         self.calls = []
+
+    async def match_doctor_hybrid(
+        self,
+        *,
+        query: str,
+        clinic_name: str | None = None,
+        top_k: int = 5,
+        min_score_multi: float = 0.6,
+        min_score_single: float = 0.55,
+    ):
+        self.calls.append("match_doctor_hybrid")
+        return HybridMatchResponse(
+            status=HybridMatchStatus.UNAMBIGUOUS_MATCH,
+            message="ok",
+            query_tokens=[],
+            best_match=DoctorMatchResult(
+                provider_id="77",
+                clinic_id="10",
+                clinic_name=clinic_name or "عيادة الباطنة",
+                name_ar=query,
+                name_en="",
+                score=0.9,
+                token_overlap=1.0,
+                fuzzy_name_score=0.9,
+                position_score=0.9,
+                matched_by_first_name=False,
+                matched_tokens=[],
+            ),
+            candidates=[],
+        )
 
     async def lookup_provider_record(self, doctor_name, clinic_name=None):
         self.calls.append("lookup_provider_record")
@@ -111,6 +147,7 @@ def test_clinic_workflow_pricing_path_uses_mcp_data():
     )
 
     assert result.qa_response["answer"] == "تم تلخيص بيانات MCP."
+    assert "match_doctor_hybrid" in fake_client.calls
     assert "get_service_price" in fake_client.calls
     assert fake_qa.last_contexts
     assert "الخدمات" in fake_qa.last_contexts[0].page_content

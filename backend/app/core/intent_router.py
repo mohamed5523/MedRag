@@ -221,7 +221,7 @@ class LLMRouter:
                     {"role": "user", "content": user_content}
                 ],
                 response_format=LLMRoutingDecision,
-                temperature=0.3,  # Lower temperature for more consistent routing
+                temperature=0.0,  # Deterministic routing for consistent behavior
             )
             
             decision = response.choices[0].message.parsed
@@ -315,9 +315,29 @@ def route_conversation(
         span.set_attribute("routing.target_entity", state.target_entity_type)
         span.set_attribute("routing.query", user_query[:100])
         
-        # Get LLM routing decision
-        router = get_router()
-        llm_decision = router.decide_route(state, user_query)
+        # Deterministic guards (rules-first) for stability:
+        # - Hospital context should always use RAG
+        # - If extracted state intent is an MCP intent, preserve it (avoid intent drift)
+        if state.target_entity_type == "hospital" or state.entities.hospital:
+            llm_decision = LLMRoutingDecision(
+                mode=RouteMode.RAG,
+                intent="hospital_info",
+                confidence=1.0,
+                reasoning="سؤال عن المستشفى - استخدام RAG",
+            )
+            span.set_attribute("routing.decision_source", "guard.hospital")
+        elif state.intent in MCP_INTENTS:
+            llm_decision = LLMRoutingDecision(
+                mode=RouteMode.MCP,
+                intent=state.intent,
+                confidence=1.0,
+                reasoning="النية مستخرجة كاستعلام عيادات - الحفاظ على MCP",
+            )
+            span.set_attribute("routing.decision_source", "guard.mcp_intent")
+        else:
+            router = get_router()
+            llm_decision = router.decide_route(state, user_query)
+            span.set_attribute("routing.decision_source", "llm")
         
         span.set_attribute("routing.llm_mode", llm_decision.mode.value)
         span.set_attribute("routing.llm_intent", llm_decision.intent)

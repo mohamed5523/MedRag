@@ -8,8 +8,17 @@ import logging
 import os
 import time
 
+import pytest
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+# This file is a diagnostics script, but pytest collects it as a unit test.
+# Make it optional so local/unit test runs don't fail if OTLP exporter deps
+# aren't installed (or Phoenix isn't running).
+try:
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+except Exception as exc:  # pragma: no cover
+    OTLPSpanExporter = None  # type: ignore[assignment]
+    _otlp_import_error = exc
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExportResult
@@ -19,6 +28,12 @@ logger = logging.getLogger(__name__)
 
 def test_phoenix_connection():
     """Test connecting to Phoenix and exporting a test trace."""
+
+    if os.getenv("RUN_PHOENIX_TESTS", "").strip() != "1":
+        pytest.skip("Phoenix/OTLP connectivity test is disabled (set RUN_PHOENIX_TESTS=1 to enable).")
+
+    if OTLPSpanExporter is None:  # pragma: no cover
+        pytest.skip(f"OTLP exporter not available: {_otlp_import_error}")
     
     endpoint = os.getenv("OTLP_HTTP_ENDPOINT", "http://localhost:6006/v1/traces")
     service_name = os.getenv("SERVICE_NAME", "medrag-backend")

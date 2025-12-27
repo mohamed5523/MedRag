@@ -39,9 +39,10 @@ tracer = trace.get_tracer("medrag.clinic_workflow")
 class MCPWorkflowError(Exception):
     """Raised when the clinic workflow cannot be completed."""
 
-    def __init__(self, message: str, *, reason: str):
+    def __init__(self, message: str, *, reason: str, data: Optional[Dict[str, Any]] = None):
         super().__init__(message)
         self.reason = reason
+        self.data = data or {}
 
 
 class ToolAuditEntry(BaseModel):
@@ -366,11 +367,25 @@ class ClinicWorkflowService:
                         raise MCPWorkflowError(
                             f"يوجد أكثر من دكتور بنفس الاسم. هل تقصد: {' أو '.join(alt_names)}؟",
                             reason="provider_ambiguous",
+                            data={
+                                "candidates": [
+                                    {
+                                        "provider_id": _safe_parse_int(c.provider_id),
+                                        "clinic_id": _safe_parse_int(c.clinic_id),
+                                        "clinic_name": c.clinic_name,
+                                        "name_ar": c.name_ar,
+                                        "name_en": c.name_en,
+                                        "score": c.score,
+                                    }
+                                    for c in match_response.candidates
+                                ]
+                            },
                         )
                     else:
                         raise MCPWorkflowError(
                             match_response.message,
                             reason="provider_ambiguous",
+                            data={"candidates": []},
                         )
                         
                 elif match_response.status == HybridMatchStatus.NO_MATCH:
@@ -390,11 +405,25 @@ class ClinicWorkflowService:
                         raise MCPWorkflowError(
                             f"مش متأكد من الاسم. هل تقصد: {' أو '.join(alt_names)}؟",
                             reason="provider_low_confidence",
+                            data={
+                                "candidates": [
+                                    {
+                                        "provider_id": _safe_parse_int(c.provider_id),
+                                        "clinic_id": _safe_parse_int(c.clinic_id),
+                                        "clinic_name": c.clinic_name,
+                                        "name_ar": c.name_ar,
+                                        "name_en": c.name_en,
+                                        "score": c.score,
+                                    }
+                                    for c in match_response.candidates
+                                ]
+                            },
                         )
                     else:
                         raise MCPWorkflowError(
                             match_response.message or "ملقتش دكتور بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
                             reason="provider_low_confidence",
+                            data={"candidates": []},
                         )
                         
                 else:

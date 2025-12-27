@@ -3,7 +3,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from opentelemetry import trace
 
@@ -69,6 +69,9 @@ class ShortTermMemoryStore:
         
     def _k_state(self, session_id: str) -> str:
         return f"{self.namespace}:s:{session_id}:state"
+
+    def _k_pending_action(self, session_id: str) -> str:
+        return f"{self.namespace}:s:{session_id}:pending_action"
 
     # Core operations
     def add_message(
@@ -240,6 +243,43 @@ class ShortTermMemoryStore:
         except Exception as e:
             logger.error(f"Redis error getting state for session {session_id[:16]}...: {e}")
             return None
+
+    # --------------------------------------------------------------------------
+    # Pending Action (Conversation Controller)
+    # --------------------------------------------------------------------------
+    def save_pending_action(self, session_id: str, payload: dict[str, Any]) -> None:
+        """
+        Save a pending action (e.g., disambiguation candidates) for the session.
+        Stored as JSON with the same TTL as the session keys.
+        """
+        k = self._k_pending_action(session_id)
+        try:
+            redis_client.set(k, payload, ex=self.session_ttl_seconds)
+        except Exception as e:
+            logger.error(f"Redis error saving pending_action for session {session_id[:16]}...: {e}")
+
+    def get_pending_action(self, session_id: str) -> Optional[dict[str, Any]]:
+        """Retrieve the pending action for the session (if any)."""
+        k = self._k_pending_action(session_id)
+        try:
+            raw = redis_client.get(k)
+            if not raw:
+                return None
+            if isinstance(raw, str):
+                return json.loads(raw)
+            # decode_responses=True should always yield str, but keep this safe
+            return json.loads(str(raw))
+        except Exception as e:
+            logger.error(f"Redis error getting pending_action for session {session_id[:16]}...: {e}")
+            return None
+
+    def clear_pending_action(self, session_id: str) -> None:
+        """Remove any pending action for the session."""
+        k = self._k_pending_action(session_id)
+        try:
+            redis_client.delete(k)
+        except Exception as e:
+            logger.error(f"Redis error clearing pending_action for session {session_id[:16]}...: {e}")
 
     def exists(self, session_id: str) -> bool:
         """Check if session exists."""
