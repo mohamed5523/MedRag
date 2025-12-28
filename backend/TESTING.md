@@ -30,11 +30,13 @@ cd heal-query-hub/backend
 ### 3. Install Dependencies
 
 Using uv (recommended):
+
 ```bash
 uv sync
 ```
 
 Or using pip:
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -73,11 +75,11 @@ The server will start at `http://localhost:8000`
 
 ### Manual Testing with Browser
 
-1. **Root endpoint**: http://localhost:8000/
-2. **Health check**: http://localhost:8000/health
-3. **API Documentation**: http://localhost:8000/docs (Interactive Swagger UI)
-4. **Chat health**: http://localhost:8000/api/chat/health
-5. **Documents list**: http://localhost:8000/api/documents/list
+1. **Root endpoint**: <http://localhost:8000/>
+2. **Health check**: <http://localhost:8000/health>
+3. **API Documentation**: <http://localhost:8000/docs> (Interactive Swagger UI)
+4. **Chat health**: <http://localhost:8000/api/chat/health>
+5. **Documents list**: <http://localhost:8000/api/documents/list>
 
 ### Automated Testing Script
 
@@ -96,26 +98,31 @@ Or test a different URL:
 ### Testing with cURL
 
 #### Health Check
+
 ```bash
 curl http://localhost:8000/health
 ```
 
 #### Root Endpoint
+
 ```bash
 curl http://localhost:8000/
 ```
 
 #### Chat Health
+
 ```bash
 curl http://localhost:8000/api/chat/health
 ```
 
 #### Documents List
+
 ```bash
 curl http://localhost:8000/api/documents/list
 ```
 
 #### Test Chat Query
+
 ```bash
 curl -X POST "http://localhost:8000/api/chat/query" \
      -H "Content-Type: application/json" \
@@ -125,6 +132,7 @@ curl -X POST "http://localhost:8000/api/chat/query" \
 ## ✅ E2E (Docker Compose) — Real Clinic API (MCP) Regression Tests
 
 This repo includes an end-to-end test script that:
+
 - builds the docker stack
 - starts `backend` + `mcp-server` + dependencies
 - fetches a real provider list
@@ -160,6 +168,7 @@ The script uses `docker-compose.e2e.yml` to inject these env vars into the MCP s
 without storing credentials in the repo.
 
 #### Upload a Document
+
 ```bash
 curl -X POST "http://localhost:8000/api/documents/upload" \
      -H "Content-Type: multipart/form-data" \
@@ -186,6 +195,7 @@ curl http://localhost:8000/health
 ```
 
 Expected response:
+
 ```json
 {
   "status": "healthy",
@@ -196,6 +206,7 @@ Expected response:
 ### Open API Documentation
 
 Open your browser and go to:
+
 ```
 http://localhost:8000/docs
 ```
@@ -259,4 +270,3 @@ Once you've verified the backend works locally:
 3. Test the chat functionality
 4. Test with observability enabled - see [TESTING_WITH_OBSERVABILITY.md](./TESTING_WITH_OBSERVABILITY.md)
 5. Then run the full Docker stack with `docker-compose up`
-

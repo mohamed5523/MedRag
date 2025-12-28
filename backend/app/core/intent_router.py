@@ -338,7 +338,7 @@ def route_conversation(
             router = get_router()
             llm_decision = router.decide_route(state, user_query)
             span.set_attribute("routing.decision_source", "llm")
-        
+            
         span.set_attribute("routing.llm_mode", llm_decision.mode.value)
         span.set_attribute("routing.llm_intent", llm_decision.intent)
         span.set_attribute("routing.llm_confidence", llm_decision.confidence)
