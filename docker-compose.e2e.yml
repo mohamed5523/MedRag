@@ -1,0 +1,12 @@
+services:
+  # E2E override: inject real clinic API endpoints & credentials into the MCP server container.
+  # IMPORTANT: do NOT put secrets here; pass them as environment variables when running.
+  mcp-server:
+    environment:
+      - CLINIC_PROVIDER_LIST_URL=${CLINIC_PROVIDER_LIST_URL}
+      - CLINIC_PROVIDER_SCHEDULE_URL=${CLINIC_PROVIDER_SCHEDULE_URL}
+      - CLINIC_SERVICE_PRICE_URL=${CLINIC_SERVICE_PRICE_URL}
+      - CLINIC_API_USERNAME=${CLINIC_API_USERNAME}
+      - CLINIC_API_PASSWORD=${CLINIC_API_PASSWORD}
+
+
