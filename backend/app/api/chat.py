@@ -432,6 +432,9 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                     if resolution:
                         short_term_memory.clear_pending_action(session_id)
                         root_span.set_attribute("pending_action.resolved", True)
+                        # Important: once resolved and cleared from storage, treat this request as no longer having
+                        # a pending action so downstream logic (e.g. symptom triage detection) can run.
+                        pending_action = None
 
                         forced_intent = str(resolution.get("intent") or "").strip() or None
 
