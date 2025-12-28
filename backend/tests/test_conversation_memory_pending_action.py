@@ -34,8 +34,8 @@ def test_pending_action_expires_with_session_ttl():
 
 
 def test_pending_action_falls_back_to_local_when_redis_set_fails(monkeypatch):
-    from app.core.conversation_memory import ShortTermMemoryStore
     from app.core import conversation_memory as cm
+    from app.core.conversation_memory import ShortTermMemoryStore
 
     store = ShortTermMemoryStore(namespace="test-medrag-fallback", session_ttl_seconds=60, max_messages=5)
     session_id = "s-test-local"
