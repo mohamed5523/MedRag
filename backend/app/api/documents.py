@@ -18,9 +18,16 @@ tracer = trace.get_tracer("medrag.documents")
 
 router = APIRouter()
 
-# Initialize components
+# Initialize components (lazy-init vector store to avoid blocking startup)
 document_processor = DocumentProcessor()
-vector_store = VectorStore()
+_vector_store: VectorStore | None = None
+
+
+def _get_vector_store() -> VectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStore()
+    return _vector_store
 
 # Upload directory
 UPLOAD_DIR = Path("uploads")
@@ -67,7 +74,7 @@ async def upload_document(file: UploadFile = File(...)):
                     raise ValueError("Document appears to be empty or unreadable")
                 
                 # Build vector index
-                chunks_created = vector_store.build_index(raw_text, file.filename)
+                chunks_created = _get_vector_store().build_index(raw_text, file.filename)
             
             processing_time = time.time() - start_time
             
@@ -154,7 +161,7 @@ async def process_supabase_document(payload: dict = Body(...)):
             raise HTTPException(status_code=400, detail="Downloaded document is empty or unreadable")
 
         # Use storage_path as stable source key so we can delete by source later
-        chunks_created = vector_store.build_index(raw_text, storage_path)
+        chunks_created = _get_vector_store().build_index(raw_text, storage_path)
 
         # Mark as processed in Supabase if id or storage_path provided
         update_query = supabase.from_("documents").update({"processed": True})
@@ -197,7 +204,7 @@ async def delete_supabase_document(payload: dict = Body(...)):
 
         # 1) Delete vectors from Weaviate by source = storage_path
         try:
-            vector_store.delete_documents_by_source(storage_path)
+            _get_vector_store().delete_documents_by_source(storage_path)
         except Exception as e:
             logger.warning(f"Vector deletion warning for {storage_path}: {e}")
 
@@ -253,7 +260,7 @@ async def get_document_stats():
     """
     try:
         # Get vector store stats
-        vector_stats = vector_store.get_collection_stats()
+        vector_stats = _get_vector_store().get_collection_stats()
         
         # Get file system stats
         total_files = len(list(UPLOAD_DIR.iterdir()))

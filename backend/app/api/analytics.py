@@ -12,8 +12,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Initialize components
-vector_store = VectorStore()
+# Initialize components (lazy-init vector store to avoid blocking startup)
+_vector_store: VectorStore | None = None
+
+
+def _get_vector_store() -> VectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStore()
+    return _vector_store
+
 qa_engine = QAEngine()
 
 # In-memory storage for analytics (in production, use a proper database)
@@ -27,7 +35,7 @@ async def get_analytics_overview():
     """
     try:
         # Get vector store stats
-        vector_stats = vector_store.get_collection_stats()
+        vector_stats = _get_vector_store().get_collection_stats()
         
         # Calculate metrics from query log
         total_queries = len(query_log)
@@ -86,7 +94,7 @@ async def get_system_health():
     Get comprehensive system health information.
     """
     try:
-        vector_stats = vector_store.get_collection_stats()
+        vector_stats = _get_vector_store().get_collection_stats()
         qa_info = qa_engine.get_model_info()
         
         # Determine overall system status

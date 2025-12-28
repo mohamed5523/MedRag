@@ -15,7 +15,7 @@ from opentelemetry import trace
 # Make it optional so local/unit test runs don't fail if OTLP exporter deps
 # aren't installed (or Phoenix isn't running).
 try:
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 except Exception as exc:  # pragma: no cover
     OTLPSpanExporter = None  # type: ignore[assignment]
     _otlp_import_error = exc

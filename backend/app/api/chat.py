@@ -34,8 +34,16 @@ ENABLE_SYMPTOM_TRIAGE = os.getenv("ENABLE_SYMPTOM_TRIAGE", "true").strip().lower
 
 router = APIRouter()
 
-# Initialize components
-vector_store = VectorStore()
+# Initialize components (lazy-init vector store to avoid blocking startup on HF model download)
+_vector_store: Optional[VectorStore] = None
+
+
+def _get_vector_store() -> VectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStore()
+    return _vector_store
+
 qa_engine = QAEngine()
 try:
     tts_service = TextToSpeech()
@@ -239,7 +247,7 @@ async def query_documents(request: ChatRequest, x_session_id: Optional[str] = He
                 span.add_event("retrieval.started", {"timestamp": datetime.now().isoformat()})
                 
                 alpha_override = ARABIC_HYBRID_ALPHA if time_context.get("is_arabic") else None
-                relevant_docs = vector_store.retrieve(
+                relevant_docs = _get_vector_store().retrieve(
                     query=retrieval_query,
                     top_k=request.max_results or 5,
                     alpha_override=alpha_override
@@ -711,7 +719,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 span.add_event("retrieval.started", {"timestamp": datetime.now().isoformat()})
 
                 alpha_override = ARABIC_HYBRID_ALPHA if time_context.get("is_arabic") else None
-                relevant_docs = vector_store.retrieve(
+                relevant_docs = _get_vector_store().retrieve(
                     query=retrieval_query,
                     top_k=request.max_results or 5,
                     alpha_override=alpha_override
@@ -834,7 +842,7 @@ async def chat_health():
     Check the health of the chat service components.
     """
     try:
-        vector_stats = vector_store.get_collection_stats()
+        vector_stats = _get_vector_store().get_collection_stats()
         qa_info = qa_engine.get_model_info()
         
         return {
@@ -880,13 +888,13 @@ async def test_query():
 
 @router.post("/session/clear")
 async def clear_session_history(x_session_id: str = Header(...)):
-    """Clear conversation history for a session."""
+    """Clear conversation history for a session (messages + state + pending actions)."""
     with tracer.start_as_current_span("session.clear_history") as span:
         span.set_attribute("session.id", x_session_id[:16] + "...")
-        deleted = short_term_memory.clear_session(x_session_id)
-        if deleted > 0:
-            return {"message": "Session history cleared", "session_id": x_session_id}
-        raise HTTPException(status_code=404, detail="Session not found")
+        # Ensure a session meta exists so clients can immediately reuse the same session id.
+        session_manager.get_or_create(x_session_id)
+        short_term_memory.clear_session(x_session_id)
+        return {"message": "Session history cleared", "session_id": x_session_id}
 
 
 @router.post("/session/end")
@@ -906,8 +914,28 @@ async def get_session_history(x_session_id: str = Header(...), limit: int = 10):
     """Get conversation history for a session (oldest-first)."""
     with tracer.start_as_current_span("session.get_history") as span:
         span.set_attribute("session.id", x_session_id[:16] + "...")
-        if not session_manager.is_valid(x_session_id):
-            raise HTTPException(status_code=404, detail="Session not found")
+        # Ensure the session exists (if client generated a new session id in the browser).
+        session_manager.get_or_create(x_session_id)
         msgs = short_term_memory.get_messages(x_session_id, limit=limit)
         history = [{"role": m.role, "content": m.content, "timestamp": m.timestamp} for m in msgs]
         return {"session_id": x_session_id, "history": history, "total_messages": len(history)}
+
+
+@router.post("/session/new")
+async def new_session(x_session_id: Optional[str] = Header(None)):
+    """
+    Create a brand-new session id and optionally end the previous session (if provided).
+    Useful for "New chat" UI flows.
+    """
+    with tracer.start_as_current_span("session.new") as span:
+        if x_session_id:
+            span.set_attribute("session.prev_id", x_session_id[:16] + "...")
+            try:
+                session_manager.delete(x_session_id)
+                short_term_memory.clear_session(x_session_id)
+            except Exception:
+                logger.debug("Failed to cleanup previous session during /session/new", exc_info=True)
+
+        new_id = session_manager.create_session()
+        span.set_attribute("session.new_id", new_id[:16] + "...")
+        return {"session_id": new_id}

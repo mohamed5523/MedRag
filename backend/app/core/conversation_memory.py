@@ -217,6 +217,13 @@ class ShortTermMemoryStore:
         with tracer.start_as_current_span("memory.clear_session") as span:
             span.set_attribute("session.id", session_id[:16] + "...")
             try:
+                # Also clear any pending action (and local fallback) so the next turn is truly "fresh".
+                try:
+                    self.clear_pending_action(session_id)
+                except Exception:
+                    # Best-effort; do not fail session clear
+                    logger.debug("Failed to clear pending_action during clear_session", exc_info=True)
+
                 deleted = redis_client.delete(
                     self._k_messages(session_id),
                     self._k_meta(session_id),

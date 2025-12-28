@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ArrowLeft, MessageCircle, Mic, Send, User, Bot, Phone, LogOut, Volume2, VolumeX } from "lucide-react";
+import { ArrowLeft, MessageCircle, Mic, Send, User, Bot, Phone, LogOut, Volume2, VolumeX, RotateCcw } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -76,6 +76,81 @@ const PatientDashboard = () => {
     }
     setSessionId(existing);
   }, []);
+
+  const loadHistory = async (activeSessionId: string) => {
+    try {
+      const resp = await fetch(`/api/chat/session/history?limit=50`, {
+        headers: { "X-Session-Id": activeSessionId }
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const history = Array.isArray(data?.history) ? data.history : [];
+      if (!history.length) return;
+
+      const mapped: Message[] = history.map((m: any, idx: number) => ({
+        id: `h_${idx}_${Date.now().toString(36)}`,
+        text: String(m?.content ?? ""),
+        sender: m?.role === "user" ? "user" : "bot",
+        timestamp: new Date(((m?.timestamp ?? Date.now() / 1000) as number) * 1000),
+        hasAudio: false,
+      }));
+
+      // Replace local UI greeting with persisted history if present
+      setMessages(mapped);
+    } catch {
+      // Ignore history load failures; UI can still operate
+    }
+  };
+
+  useEffect(() => {
+    if (!sessionId) return;
+    loadHistory(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  const handleNewChat = async () => {
+    try {
+      const prev = ensureSessionId();
+      const resp = await fetch("/api/chat/session/new", {
+        method: "POST",
+        headers: prev ? { "X-Session-Id": prev } : undefined
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const newId = String(data?.session_id || "");
+        if (newId) {
+          window.localStorage.setItem(SESSION_STORAGE_KEY, newId);
+          setSessionId(newId);
+        } else {
+          // fallback: client-generated
+          const localNew = generateSessionId();
+          window.localStorage.setItem(SESSION_STORAGE_KEY, localNew);
+          setSessionId(localNew);
+        }
+      } else {
+        const localNew = generateSessionId();
+        window.localStorage.setItem(SESSION_STORAGE_KEY, localNew);
+        setSessionId(localNew);
+      }
+    } catch {
+      const localNew = generateSessionId();
+      window.localStorage.setItem(SESSION_STORAGE_KEY, localNew);
+      setSessionId(localNew);
+    }
+
+    // Reset UI state
+    stopAudio();
+    setPlayingAudioId(null);
+    setMessages([
+      {
+        id: "1",
+        text: initialGreetingText,
+        sender: "bot",
+        timestamp: new Date(),
+      },
+    ]);
+    toast({ title: "New chat started", description: "Your previous chat has been cleared." });
+  };
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -397,10 +472,21 @@ const PatientDashboard = () => {
               <h1 className="text-xl font-bold text-medical-dark">Patient Assistant</h1>
             </div>
             <div className="ml-auto">
-              <Button variant="outline" size="sm" onClick={signOut}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Sign Out
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNewChat}
+                  className="border-primary/30 hover:bg-primary/10 text-medical-dark"
+                >
+                  <RotateCcw className="w-4 h-4 mr-2 text-primary" />
+                  New Chat
+                </Button>
+                <Button variant="outline" size="sm" onClick={signOut}>
+                  <LogOut className="w-4 h-4 mr-2" />
+                  Sign Out
+                </Button>
+              </div>
             </div>
           </div>
         </div>

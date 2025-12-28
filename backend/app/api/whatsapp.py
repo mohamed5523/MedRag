@@ -28,8 +28,16 @@ WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 
 
-# Initialize core services (reuse existing QA/VectorStore/TTS)
-vector_store = VectorStore()
+# Initialize core services (reuse existing QA/TTS; lazy-init vector store to avoid blocking startup)
+_vector_store: VectorStore | None = None
+
+
+def _get_vector_store() -> VectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStore()
+    return _vector_store
+
 qa_engine = QAEngine()
 try:
     tts_service = TextToSpeech()
@@ -134,7 +142,7 @@ async def whatsapp_handler(request: Request) -> Response:
             )
             return Response(content="Service unavailable", status_code=200)
 
-        relevant_docs = vector_store.retrieve(query=user_text, top_k=5)
+        relevant_docs = _get_vector_store().retrieve(query=user_text, top_k=5)
         if not relevant_docs:
             answer = (
                 "I don't have any relevant information in my knowledge base to answer your question. "
