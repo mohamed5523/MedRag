@@ -195,3 +195,114 @@ def resolve_pending_action(user_text: str, pending_action: dict[str, Any]) -> Op
     }
 
 
+def format_provider_disambiguation_prompt(candidates: list[dict[str, Any]]) -> str:
+    """
+    Build a user-facing prompt for provider disambiguation.
+
+    UX rule:
+    - 0 candidates: ask user to provide full name.
+    - 1 candidate: ask for confirmation (don't claim ambiguity).
+    - 2+ candidates: show numbered list.
+    """
+    names: list[str] = []
+    for c in candidates[:5]:
+        if not isinstance(c, dict):
+            continue
+        name = (str(c.get("name_ar") or c.get("name_en") or "")).strip()
+        if name:
+            names.append(name)
+
+    if not names:
+        return "ممكن تكتب الاسم كامل عشان أقدر أحدد الدكتور صح؟"
+
+    if len(names) == 1:
+        n = names[0]
+        return (
+            f"هل تقصد دكتور {n}؟ للتأكيد ابعت رقم 1 أو ١، "
+            "أو اكتب الاسم بالكامل بشكل صحيح."
+        )
+
+    parts = ["فيه أكتر من دكتور بنفس الاسم. اختار رقم من دول"]
+    for i, n in enumerate(names, start=1):
+        parts.append(f"{i} {n}")
+    parts.append("اكتب رقم الاختيار أو اكتب الاسم كامل")
+    return " ".join(parts).strip()
+
+
+def materialize_intent_query(
+    intent: Optional[str],
+    *,
+    doctor_name: Optional[str] = None,
+    clinic_name: Optional[str] = None,
+) -> str:
+    """Build a stable Arabic query string from intent + entities."""
+    doctor = (doctor_name or "").strip()
+    clinic = (clinic_name or "").strip()
+    i = (intent or "").strip()
+
+    if i == "ask_price":
+        if doctor and clinic:
+            return f"سعر الكشف عند الدكتور {doctor} في {clinic}"
+        if doctor:
+            return f"سعر الكشف عند الدكتور {doctor}"
+        if clinic:
+            return f"سعر الكشف في {clinic}"
+        return "سعر الكشف"
+
+    if i in {"check_availability", "book_appointment"}:
+        if doctor and clinic:
+            return f"مواعيد الدكتور {doctor} في {clinic}"
+        if doctor:
+            return f"مواعيد الدكتور {doctor}"
+        if clinic:
+            return f"مواعيد {clinic}"
+        return "المواعيد"
+
+    if i == "list_doctors":
+        if clinic:
+            return f"اسماء الأطباء في {clinic}"
+        return "اسماء الأطباء"
+
+    if doctor:
+        return f"{i} عند الدكتور {doctor}"
+    return i or "استفسار"
+
+
+def apply_pending_action_resolution(
+    pending_action_type: Optional[str],
+    resolution: dict[str, Any],
+    request_query: str,
+) -> tuple[
+    Optional[str],
+    Optional[str],
+    Optional[str],
+    Optional[str],
+    str,
+]:
+    """
+    Convert a resolved pending_action into forced intent/entity overrides and a stable state_input_query.
+    """
+    forced_intent = str(resolution.get("intent") or "").strip() or None
+    forced_doctor: Optional[str] = None
+    forced_clinic: Optional[str] = None
+    forced_specialty: Optional[str] = None
+    state_input_query = request_query
+
+    if pending_action_type == "provider_disambiguation":
+        selected = resolution.get("selected") or {}
+        if isinstance(selected, dict):
+            forced_doctor = (selected.get("name_ar") or selected.get("name_en") or "").strip() or None
+            forced_clinic = (selected.get("clinic_name") or "").strip() or None
+        if forced_intent and forced_doctor:
+            state_input_query = materialize_intent_query(
+                forced_intent, doctor_name=forced_doctor, clinic_name=forced_clinic
+            )
+
+    elif pending_action_type == "symptom_triage":
+        forced_intent = "list_doctors"
+        forced_specialty = str(resolution.get("specialty") or "").strip() or None
+        state_input_query = str(resolution.get("combined_query") or request_query)
+
+    return forced_intent, forced_doctor, forced_clinic, forced_specialty, state_input_query
+
+

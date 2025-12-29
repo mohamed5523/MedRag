@@ -14,7 +14,7 @@ from opentelemetry import trace
 # This file is a diagnostics script, but pytest collects it as a unit test.
 # Make it optional so local/unit test runs don't fail if OTLP exporter deps
 # aren't installed (or Phoenix isn't running).
-try:
+try:  # pragma: no cover
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 except Exception as exc:  # pragma: no cover
     OTLPSpanExporter = None  # type: ignore[assignment]

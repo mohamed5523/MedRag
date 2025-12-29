@@ -8,12 +8,14 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from opentelemetry import trace
 
-from ..core.conversation_memory import short_term_memory
 from ..core.conversation_controller import (
+    apply_pending_action_resolution,
+    format_provider_disambiguation_prompt,
     infer_specialty_from_symptoms,
     is_symptom_triage_request,
     resolve_pending_action,
 )
+from ..core.conversation_memory import short_term_memory
 from ..core.intent_router import RouteMode, route_conversation
 from ..core.qa_engine import QAEngine
 from ..core.session_manager import session_manager
@@ -85,19 +87,27 @@ def _materialize_intent_query(intent: str, *, doctor_name: str | None = None, cl
 
 
 def _format_provider_disambiguation_prompt(candidates: list[dict]) -> str:
-    """Build a numbered selection prompt for provider disambiguation."""
-    names: list[str] = []
-    for c in candidates[:5]:
-        name = (c.get("name_ar") or c.get("name_en") or "").strip()
-        if name:
-            names.append(name)
-    if not names:
-        return "فيه أكتر من دكتور بنفس الاسم. ممكن تكتب الاسم كامل؟"
-    parts = ["فيه أكتر من دكتور بنفس الاسم. اختار رقم من دول"]
-    for i, n in enumerate(names, start=1):
-        parts.append(f"{i} {n}")
-    parts.append("اكتب رقم الاختيار أو اكتب الاسم كامل")
-    return " ".join(parts).strip()
+    return format_provider_disambiguation_prompt(candidates)
+
+
+def _apply_pending_action_resolution(
+    pending_action_type: str | None,
+    resolution: dict,
+    request_query: str,
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str,
+]:
+    """
+    Convert a resolved pending_action into forced intent/entity overrides and a stable state_input_query.
+
+    This is a small helper so we can unit-test the mapping logic and avoid bugs where pending_action
+    is cleared/None but later accessed.
+    """
+    return apply_pending_action_resolution(pending_action_type, resolution, request_query)
 
 
 async def _maybe_generate_audio(text: str) -> tuple[Optional[str], Optional[int], bool]:
@@ -427,32 +437,25 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 if pending_action:
                     root_span.set_attribute("pending_action.type", pending_action.get("type", ""))
                     root_span.set_attribute("pending_action.intent", pending_action.get("intent", ""))
+                    pending_action_type = (str(pending_action.get("type") or "").strip() or None)
 
                     resolution = resolve_pending_action(request.query, pending_action)
                     if resolution:
                         short_term_memory.clear_pending_action(session_id)
                         root_span.set_attribute("pending_action.resolved", True)
+                        (
+                            forced_intent,
+                            forced_doctor,
+                            forced_clinic,
+                            forced_specialty,
+                            state_input_query,
+                        ) = _apply_pending_action_resolution(
+                            pending_action_type, resolution, request.query
+                        )
+                        
                         # Important: once resolved and cleared from storage, treat this request as no longer having
                         # a pending action so downstream logic (e.g. symptom triage detection) can run.
                         pending_action = None
-
-                        forced_intent = str(resolution.get("intent") or "").strip() or None
-
-                        if pending_action.get("type") == "provider_disambiguation":
-                            selected = resolution.get("selected") or {}
-                            if isinstance(selected, dict):
-                                forced_doctor = (selected.get("name_ar") or selected.get("name_en") or "").strip() or None
-                                forced_clinic = (selected.get("clinic_name") or "").strip() or None
-                            # Build a full query to stabilize state extraction + tool selection
-                            if forced_intent and forced_doctor:
-                                state_input_query = _materialize_intent_query(
-                                    forced_intent, doctor_name=forced_doctor, clinic_name=forced_clinic
-                                )
-
-                        elif pending_action.get("type") == "symptom_triage":
-                            forced_intent = "list_doctors"
-                            forced_specialty = str(resolution.get("specialty") or "").strip() or None
-                            state_input_query = str(resolution.get("combined_query") or request.query)
                     else:
                         # Not resolved: re-prompt without re-running ambiguous MCP logic
                         turns_remaining = int(pending_action.get("turns_remaining") or 2) - 1
