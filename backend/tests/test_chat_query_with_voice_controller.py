@@ -53,6 +53,11 @@ class FakeSessionManager:
     def get_or_create(self, x_session_id=None):
         return "sess"
 
+    # Some endpoints (or future refactors) may create a fresh session id when no header is provided.
+    # Keep this mock compatible with SessionManager's public API.
+    def create_session(self, session_id=None):
+        return "sess"
+
 
 class FakeStateManager:
     def extract_state(self, current_query, chat_history, previous_state=None):
