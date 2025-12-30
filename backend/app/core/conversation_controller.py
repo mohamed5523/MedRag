@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-
 _ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
 
