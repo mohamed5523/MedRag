@@ -32,6 +32,11 @@ def normalize_arabic(text: str) -> str:
     text = ARABIC_TASHKEEL_PATTERN.sub("", text)
     text = ARABIC_TATWEEL_PATTERN.sub("", text)
     text = re.sub("[إأآا]", "ا", text)  # alef variants
+    # Normalize common hamza variants for fuzzy matching (helps noisy user input)
+    # Note: keep this conservative; it improves recall for both doctor/clinic names.
+    text = text.replace("ؤ", "و")
+    text = text.replace("ئ", "ي")
+    text = text.replace("ء", "")
     text = text.replace("ة", "ه")
     text = text.replace("ى", "ي")
     text = re.sub(r"\s+", " ", text)
@@ -54,6 +59,9 @@ def normalize_mixed_text(text: str) -> str:
     text = text.strip()
     text = normalize_arabic(text)
     text = text.lower()
+    # Remove common Arabic punctuation that sits inside the Arabic unicode block
+    # (so it would otherwise survive the regex below).
+    text = text.replace("؟", " ").replace("،", " ").replace("؛", " ").replace("ـ", " ")
     # keep Arabic range and word characters
     text = re.sub(r"[^\w\s\u0600-\u06FF]", " ", text)
     text = re.sub(r"\s+", " ", text)
@@ -68,6 +76,78 @@ def tokenize_name(text: str) -> List[str]:
         t for t in tokens
         if len(t) > 1 and t not in TITLE_STOPWORDS
     ]
+
+
+CLINIC_STOPWORDS = {
+    # Arabic
+    "عيادة",
+    "عياده",
+    "عيادات",
+    "قسم",
+    "مركز",
+    "مجمع",
+    # Very common glue words
+    "و",
+    "في",
+    "ب",
+    "بال",
+    "ال",
+    # Common date/time words that often appear in clinic queries but are NOT part of clinic names
+    "النهارده",
+    "نهارده",
+    "اليوم",
+    "بكره",
+    "بكرة",
+    "غدا",
+    "غداً",
+    # Common query words (if the upstream extraction accidentally passes whole question)
+    "مين",
+    "موجود",
+    "موجودين",
+    "متاح",
+    "مواعيد",
+    "سعر",
+    "كشف",
+    # English
+    "clinic",
+    "department",
+    "center",
+}
+
+
+def tokenize_clinic(text: str) -> List[str]:
+    """
+    Tokenize a clinic phrase robustly (Arabic/English), removing generic words and
+    normalizing common variants.
+
+    Key behaviors:
+    - Removes "عيادة/قسم/مركز/clinic" and similar generic tokens
+    - Strips leading "ال"
+    - Handles the Arabic conjunction "و" both standalone ("و توليد") and attached ("وتوليد")
+    - Leverages normalize_mixed_text() which calls normalize_arabic() (incl. hamza folding)
+    """
+    norm = normalize_mixed_text(text)
+    if not norm:
+        return []
+
+    raw_tokens = norm.split()
+    tokens: List[str] = []
+    for tok in raw_tokens:
+        if tok in CLINIC_STOPWORDS:
+            continue
+        # Strip Arabic definite article
+        if tok.startswith("ال") and len(tok) > 3:
+            tok = tok[2:]
+        # Drop standalone "و" and strip attached "و" when it's likely a conjunction
+        if tok == "و":
+            continue
+        if tok.startswith("و") and len(tok) > 3:
+            tok = tok[1:]
+        if len(tok) > 1 and tok not in CLINIC_STOPWORDS:
+            tokens.append(tok)
+
+    # Preserve order but de-dupe
+    return list(dict.fromkeys(tokens))
 
 
 # ------------------------------------------------------------------------------

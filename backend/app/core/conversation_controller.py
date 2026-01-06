@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-_ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+# Support both Arabic-Indic digits (٠١٢...) and Eastern Arabic/Persian digits (۰۱۲...).
+_ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 
 
 def _normalize_arabic_text(text: str) -> str:
@@ -180,7 +181,17 @@ def resolve_pending_action(user_text: str, pending_action: dict[str, Any]) -> Op
     names: list[str] = []
     for cand in candidates:
         if isinstance(cand, dict):
-            names.append(str(cand.get("name_ar") or cand.get("name_en") or ""))
+            if action_type == "clinic_disambiguation":
+                names.append(
+                    str(
+                        cand.get("clinic_name")
+                        or cand.get("name_ar")
+                        or cand.get("name_en")
+                        or ""
+                    )
+                )
+            else:
+                names.append(str(cand.get("name_ar") or cand.get("name_en") or ""))
         else:
             names.append(str(cand))
 
@@ -191,7 +202,158 @@ def resolve_pending_action(user_text: str, pending_action: dict[str, Any]) -> Op
     return {
         "intent": pending_action.get("intent"),
         "selected": candidates[idx],
+        # Keep the original question so that after disambiguation we can continue
+        # answering the *full* user request (e.g., "مواعيد + سعر") instead of only
+        # materializing a single-intent query like "مواعيد ...".
+        "original_question": pending_action.get("original_question"),
     }
+
+
+def should_abandon_pending_action(user_text: str, pending_action: dict[str, Any]) -> bool:
+    """
+    Return True when the user reply looks like a NEW request (new doctor/clinic/intent),
+    not a selection for the current pending_action.
+
+    Goal: avoid "stuck turn" loops where user changes intent mid-disambiguation.
+    """
+    if not pending_action:
+        return False
+
+    action_type = str(pending_action.get("type") or "").strip()
+    if action_type not in {
+        "provider_disambiguation",
+        "provider_clinic_mismatch",
+        "clinic_disambiguation",
+    }:
+        return False
+
+    t = _normalize_arabic_text(user_text)
+    if not t:
+        return False
+
+    # If the user typed a number, treat it as an explicit selection attempt.
+    if re.search(r"\b(\d{1,2})\b", t):
+        return False
+
+    # If they mention a new doctor/clinic/intent phrase with enough content, abandon.
+    triggers = [
+        # entities
+        "دكتور",
+        "د",
+        "عياده",
+        "عيادة",
+        "عيادات",
+        # intents
+        "مواعيد",
+        "سعر",
+        "كشف",
+        "احجز",
+        "حجز",
+        "متاح",
+        # conversational overrides
+        "اقصد",
+        "قصد",
+        "مش",
+        "لا",
+        "لأ",
+        "تمام",
+    ]
+    if any(k in t for k in triggers) and len(t.split()) >= 3:
+        return True
+
+    return False
+
+
+def _explicit_doctor_mention(text: str) -> bool:
+    """
+    Detect explicit doctor mention in Arabic/English.
+    We require a token boundary to avoid matching inside other words.
+    """
+    t = _normalize_arabic_text(text)
+    if not t:
+        return False
+    return bool(re.search(r"(?:^|\s)(?:دكتور|د\.?|dr|doctor)(?:\s|$)", t, flags=re.IGNORECASE))
+
+
+def _explicit_clinic_mention(text: str) -> bool:
+    """
+    Detect explicit clinic mention, but treat phrases like 'عيادة دكتور X' as a doctor mention
+    (not a clinic mention), since users often mean 'the doctor's clinic'.
+    """
+    t = _normalize_arabic_text(text)
+    if not t:
+        return False
+    # If "عيادة" is immediately followed by a doctor marker, don't treat it as a clinic mention.
+    if re.search(r"(?:^|\s)عياد[هة]\s+(?:دكتور|د\.?|dr|doctor)(?:\s|$)", t, flags=re.IGNORECASE):
+        return False
+    return bool(re.search(r"(?:^|\s)عياد[هة](?:\s|$)", t))
+
+
+def _extract_clinic_phrase(text: str) -> Optional[str]:
+    """
+    Extract a clinic phrase from user text, e.g.:
+      - "مين موجود في عيادة الاسنان النهارده" -> "عيادة الاسنان"
+      - "مواعيد عيادة المسا و التوليد" -> "عيادة المسا و التوليد"
+    """
+    t = _normalize_arabic_text(text)
+    if not t:
+        return None
+
+    # Avoid treating "عيادة دكتور X" as a clinic phrase.
+    if re.search(r"(?:^|\s)عياد[هة]\s+(?:دكتور|د\.?|dr|doctor)(?:\s|$)", t, flags=re.IGNORECASE):
+        return None
+
+    m = re.search(r"(?:^|\s)عياد[هة]\s+(.+)", t, flags=re.IGNORECASE)
+    if not m:
+        return None
+
+    candidate = m.group(1).strip()
+    # Stop at punctuation
+    candidate = re.split(r"[?.,!،]", candidate)[0].strip()
+    # Stop at common date/time trailing words (they are not part of clinic names)
+    candidate = re.split(r"\b(النهارده|نهارده|اليوم|بكره|بكرة|غدا|غداً)\b", candidate)[0].strip()
+
+    words = [w for w in candidate.split() if w]
+    if not words:
+        return None
+
+    # Limit phrase length to avoid swallowing the whole question.
+    words = words[:6]
+    phrase = "عيادة " + " ".join(words)
+    return phrase.strip() or None
+
+
+def apply_context_switch_rules(query_text: str, entities: Any) -> None:
+    """
+    Deterministic post-processing to avoid 'stuck' context when users change intent mid-chat.
+
+    Rules:
+    - If user explicitly mentions a doctor but does NOT explicitly mention a clinic,
+      clear clinic context (clinic + clinic_id).
+    - If user explicitly mentions a clinic but does NOT explicitly mention a doctor,
+      clear doctor context (doctor + provider_id).
+    """
+    has_doc = _explicit_doctor_mention(query_text)
+    has_clinic = _explicit_clinic_mention(query_text)
+
+    if has_doc and not has_clinic:
+        if hasattr(entities, "clinic"):
+            entities.clinic = None
+        if hasattr(entities, "clinic_id"):
+            entities.clinic_id = None
+
+    if has_clinic and not has_doc:
+        # If user explicitly mentioned a clinic this turn, overwrite any stale clinic from previous state.
+        extracted = _extract_clinic_phrase(query_text)
+        if extracted and hasattr(entities, "clinic"):
+            entities.clinic = extracted
+        # New clinic mention should invalidate a previously resolved clinic_id.
+        if hasattr(entities, "clinic_id"):
+            entities.clinic_id = None
+        if hasattr(entities, "doctor"):
+            entities.doctor = None
+        if hasattr(entities, "provider_id"):
+            entities.provider_id = None
 
 
 def format_provider_disambiguation_prompt(candidates: list[dict[str, Any]]) -> str:
@@ -222,6 +384,37 @@ def format_provider_disambiguation_prompt(candidates: list[dict[str, Any]]) -> s
         )
 
     parts = ["فيه أكتر من دكتور بنفس الاسم. اختار رقم من دول"]
+    for i, n in enumerate(names, start=1):
+        parts.append(f"{i} {n}")
+    parts.append("اكتب رقم الاختيار أو اكتب الاسم كامل")
+    return " ".join(parts).strip()
+
+
+def format_clinic_disambiguation_prompt(candidates: list[dict[str, Any]]) -> str:
+    """
+    Build a user-facing prompt for clinic disambiguation.
+
+    Mirrors provider disambiguation UX but uses clinic names.
+    """
+    names: list[str] = []
+    for c in candidates[:5]:
+        if not isinstance(c, dict):
+            continue
+        name = (str(c.get("clinic_name") or c.get("name_ar") or c.get("name_en") or "")).strip()
+        if name:
+            names.append(name)
+
+    if not names:
+        return "ممكن تكتب اسم العيادة كامل عشان أقدر أحددها صح؟"
+
+    if len(names) == 1:
+        n = names[0]
+        return (
+            f"هل تقصد عيادة {n}؟ للتأكيد ابعت رقم 1 أو ١، "
+            "أو اكتب الاسم بالكامل بشكل صحيح."
+        )
+
+    parts = ["فيه أكتر من عيادة بنفس الاسم. اختار رقم من دول"]
     for i, n in enumerate(names, start=1):
         parts.append(f"{i} {n}")
     parts.append("اكتب رقم الاختيار أو اكتب الاسم كامل")
@@ -286,16 +479,31 @@ def apply_pending_action_resolution(
     forced_clinic: Optional[str] = None
     forced_specialty: Optional[str] = None
     state_input_query = request_query
+    original_question = str(resolution.get("original_question") or "").strip() or None
 
-    if pending_action_type == "provider_disambiguation":
+    if pending_action_type in {"provider_disambiguation", "provider_clinic_mismatch"}:
         selected = resolution.get("selected") or {}
         if isinstance(selected, dict):
             forced_doctor = (selected.get("name_ar") or selected.get("name_en") or "").strip() or None
             forced_clinic = (selected.get("clinic_name") or "").strip() or None
-        if forced_intent and forced_doctor:
+        if original_question:
+            state_input_query = original_question
+        elif forced_intent and forced_doctor:
             state_input_query = materialize_intent_query(
                 forced_intent, doctor_name=forced_doctor, clinic_name=forced_clinic
             )
+
+    elif pending_action_type == "clinic_disambiguation":
+        selected = resolution.get("selected") or {}
+        if isinstance(selected, dict):
+            forced_clinic = (
+                (selected.get("clinic_name") or selected.get("name_ar") or selected.get("name_en") or "").strip()
+                or None
+            )
+        if original_question:
+            state_input_query = original_question
+        elif forced_intent and forced_clinic:
+            state_input_query = materialize_intent_query(forced_intent, clinic_name=forced_clinic)
 
     elif pending_action_type == "symptom_triage":
         forced_intent = "list_doctors"

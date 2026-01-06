@@ -5,6 +5,8 @@ import pytest
 from app.core.intent_router import RouteDecision, RouteMode
 from app.core.state_manager import ConversationState, Entities
 from app.integrations.mcp_client import (
+    ClinicMatchResponse,
+    ClinicMatchResult,
     DoctorMatchResult,
     HybridMatchResponse,
     HybridMatchStatus,
@@ -41,10 +43,29 @@ class FakeMCPClient:
     def __init__(self):
         self.calls = []
 
+    async def match_clinic_hybrid(self, *, query: str, top_k: int = 5, min_score: float = 0.65):
+        self.calls.append("match_clinic_hybrid")
+        return ClinicMatchResponse(
+            status=HybridMatchStatus.UNAMBIGUOUS_MATCH,
+            message="ok",
+            query_tokens=[],
+            best_match=ClinicMatchResult(
+                clinic_id="10",
+                clinic_name=query or "عيادة الباطنة",
+                score=0.9,
+                token_overlap=1.0,
+                fuzzy_name_score=0.9,
+                order_score=0.9,
+                matched_tokens=[],
+            ),
+            candidates=[],
+        )
+
     async def match_doctor_hybrid(
         self,
         *,
         query: str,
+        clinic_id: str | None = None,
         clinic_name: str | None = None,
         top_k: int = 5,
         min_score_multi: float = 0.6,
@@ -57,7 +78,7 @@ class FakeMCPClient:
             query_tokens=[],
             best_match=DoctorMatchResult(
                 provider_id="77",
-                clinic_id="10",
+                clinic_id=clinic_id or "10",
                 clinic_name=clinic_name or "عيادة الباطنة",
                 name_ar=query,
                 name_en="",

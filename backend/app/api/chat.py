@@ -10,10 +10,13 @@ from opentelemetry import trace
 
 from ..core.conversation_controller import (
     apply_pending_action_resolution,
+    apply_context_switch_rules,
+    format_clinic_disambiguation_prompt,
     format_provider_disambiguation_prompt,
     infer_specialty_from_symptoms,
     is_symptom_triage_request,
     resolve_pending_action,
+    should_abandon_pending_action,
 )
 from ..core.conversation_memory import short_term_memory
 from ..core.intent_router import RouteMode, route_conversation
@@ -88,6 +91,63 @@ def _materialize_intent_query(intent: str, *, doctor_name: str | None = None, cl
 
 def _format_provider_disambiguation_prompt(candidates: list[dict]) -> str:
     return format_provider_disambiguation_prompt(candidates)
+
+
+def _format_clinic_disambiguation_prompt(candidates: list[dict]) -> str:
+    return format_clinic_disambiguation_prompt(candidates)
+
+
+def _format_provider_clinic_mismatch_prompt(
+    candidates: list[dict],
+    *,
+    requested_clinic: str | None = None,
+) -> str:
+    """
+    Build a user-facing prompt when the doctor exists but not in the requested clinic.
+
+    We still present it as a numbered selection so it fits the pending_action flow.
+    """
+    requested = (requested_clinic or "").strip()
+    # Extract display tuples (doctor_name, clinic_name)
+    items: list[tuple[str, str]] = []
+    for c in candidates[:5]:
+        if not isinstance(c, dict):
+            continue
+        name = (str(c.get("name_ar") or c.get("name_en") or "")).strip()
+        clinic = (str(c.get("clinic_name") or "")).strip()
+        if name:
+            items.append((name, clinic))
+
+    if not items:
+        return "الاسم موجود لكن مش في العيادة اللي اتذكرت. ممكن تكتب اسم العيادة أو اسم الدكتور بالكامل؟"
+
+    if len(items) == 1:
+        name, clinic = items[0]
+        if requested and clinic:
+            return (
+                f"الاسم موجود، لكن مش في {requested}. "
+                f"الدكتور {name} موجود في عيادة {clinic}. "
+                "اكتب رقم 1 أو ١ للتأكيد، أو اكتب اسم عيادة أخرى."
+            )
+        if clinic:
+            return (
+                f"الدكتور {name} موجود في عيادة {clinic}. "
+                "اكتب رقم 1 أو ١ للتأكيد، أو اكتب اسم عيادة أخرى."
+            )
+        return (
+            f"هل تقصد دكتور {name}؟ للتأكيد ابعت رقم 1 أو ١، "
+            "أو اكتب الاسم بالكامل بشكل صحيح."
+        )
+
+    parts: list[str] = []
+    if requested:
+        parts.append(f"ملقتش الدكتور في {requested}.")
+    parts.append("لقيت دكاترة بنفس الاسم لكن في عيادات مختلفة. اختار رقم:")
+    for i, (name, clinic) in enumerate(items, start=1):
+        suffix = f" — {clinic}" if clinic else ""
+        parts.append(f"{i} {name}{suffix}")
+    parts.append("اكتب رقم الاختيار أو اكتب اسم العيادة المطلوبة")
+    return " ".join(parts).strip()
 
 
 def _apply_pending_action_resolution(
@@ -429,6 +489,9 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
             forced_intent: Optional[str] = None
             forced_doctor: Optional[str] = None
             forced_clinic: Optional[str] = None
+            forced_clinic_id: Optional[int] = None
+            forced_provider_id: Optional[int] = None
+            reset_doctor: bool = False
             forced_specialty: Optional[str] = None
             state_input_query = request.query
 
@@ -441,6 +504,27 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
 
                     resolution = resolve_pending_action(request.query, pending_action)
                     if resolution:
+                        # Capture IDs from the selected candidate BEFORE clearing pending_action.
+                        selected = resolution.get("selected") if isinstance(resolution, dict) else None
+                        if isinstance(selected, dict):
+                            if pending_action_type == "clinic_disambiguation":
+                                try:
+                                    forced_clinic_id = int(selected.get("clinic_id")) if selected.get("clinic_id") is not None else None
+                                except Exception:
+                                    forced_clinic_id = None
+                                forced_clinic = (selected.get("clinic_name") or forced_clinic or "").strip() or None
+                                # If the user is selecting a clinic, avoid carrying over a stale doctor from previous_state.
+                                reset_doctor = True
+                            elif pending_action_type in {"provider_disambiguation", "provider_clinic_mismatch"}:
+                                try:
+                                    forced_provider_id = int(selected.get("provider_id")) if selected.get("provider_id") is not None else None
+                                except Exception:
+                                    forced_provider_id = None
+                                try:
+                                    forced_clinic_id = int(selected.get("clinic_id")) if selected.get("clinic_id") is not None else None
+                                except Exception:
+                                    forced_clinic_id = forced_clinic_id
+
                         short_term_memory.clear_pending_action(session_id)
                         root_span.set_attribute("pending_action.resolved", True)
                         (
@@ -457,34 +541,50 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                         # a pending action so downstream logic (e.g. symptom triage detection) can run.
                         pending_action = None
                     else:
-                        # Not resolved: re-prompt without re-running ambiguous MCP logic
-                        turns_remaining = int(pending_action.get("turns_remaining") or 2) - 1
-                        pending_action["turns_remaining"] = turns_remaining
-                        if turns_remaining <= 0:
+                        # User might be changing their mind/intent. If so, abandon the pending_action
+                        # and continue normal processing (state extraction + routing).
+                        if should_abandon_pending_action(request.query, pending_action):
                             short_term_memory.clear_pending_action(session_id)
-                            prompt = "ممكن تكتب الاسم كامل عشان أقدر أحدد الدكتور أو العيادة صح؟"
+                            root_span.set_attribute("pending_action.abandoned", True)
+                            pending_action = None
                         else:
-                            short_term_memory.save_pending_action(session_id, pending_action)
-                            if pending_action.get("type") == "provider_disambiguation":
-                                prompt = _format_provider_disambiguation_prompt(
-                                    list(pending_action.get("candidates") or [])
-                                )
+                            # Not resolved: re-prompt without re-running ambiguous MCP logic
+                            turns_remaining = int(pending_action.get("turns_remaining") or 2) - 1
+                            pending_action["turns_remaining"] = turns_remaining
+                            if turns_remaining <= 0:
+                                short_term_memory.clear_pending_action(session_id)
+                                prompt = "ممكن تكتب الاسم كامل عشان أقدر أحدد الدكتور أو العيادة صح؟"
                             else:
-                                prompt = "قولي الألم فين بالظبط وهل فيه سخونية أو قيء؟"
+                                short_term_memory.save_pending_action(session_id, pending_action)
+                                if pending_action.get("type") == "provider_disambiguation":
+                                    prompt = _format_provider_disambiguation_prompt(
+                                        list(pending_action.get("candidates") or [])
+                                    )
+                                elif pending_action.get("type") == "provider_clinic_mismatch":
+                                    prompt = _format_provider_clinic_mismatch_prompt(
+                                        list(pending_action.get("candidates") or []),
+                                        requested_clinic=str(pending_action.get("requested_clinic") or "").strip() or None,
+                                    )
+                                elif pending_action.get("type") == "clinic_disambiguation":
+                                    prompt = _format_clinic_disambiguation_prompt(
+                                        list(pending_action.get("candidates") or [])
+                                    )
+                                else:
+                                    prompt = "قولي الألم فين بالظبط وهل فيه سخونية أو قيء؟"
 
-                        short_term_memory.add_message(session_id, "assistant", prompt)
-                        audio_data, audio_size, has_audio = await _maybe_generate_audio(prompt)
-                        return ChatResponseWithAudio(
-                            answer=prompt,
-                            sources=[],
-                            context_count=0,
-                            model_used=qa_engine.model,
-                            tokens_used=0,
-                            audio_data=audio_data,
-                            audio_size=audio_size,
-                            has_audio=has_audio,
-                            error="pending_action",
-                        )
+                            short_term_memory.add_message(session_id, "assistant", prompt)
+                            audio_data, audio_size, has_audio = await _maybe_generate_audio(prompt)
+                            return ChatResponseWithAudio(
+                                answer=prompt,
+                                sources=[],
+                                context_count=0,
+                                model_used=qa_engine.model,
+                                tokens_used=0,
+                                audio_data=audio_data,
+                                audio_size=audio_size,
+                                has_audio=has_audio,
+                                error="pending_action",
+                            )
             
             with tracer.start_as_current_span("extract_state") as span:
                 new_state = state_manager.extract_state(state_input_query, history_dicts, previous_state)
@@ -506,8 +606,21 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 new_state.entities.clinic = forced_clinic
                 if new_state.target_entity_type == "unknown":
                     new_state.target_entity_type = "clinic"
+            if forced_clinic_id is not None:
+                new_state.entities.clinic_id = forced_clinic_id
+            if forced_provider_id is not None:
+                new_state.entities.provider_id = forced_provider_id
+            if reset_doctor:
+                new_state.entities.doctor = None
+                new_state.entities.provider_id = None
+                if new_state.target_entity_type == "doctor":
+                    new_state.target_entity_type = "clinic"
             if forced_specialty:
                 new_state.entities.specialty = forced_specialty
+
+            # Allow the user to change intent/entities at any time:
+            # e.g. after a clinic-focused turn, user switches to a doctor-focused query.
+            apply_context_switch_rules(request.query, new_state.entities)
 
             # Symptom triage (Option A): route "اروح لمين" symptom queries to MCP list_doctors
             if ENABLE_SYMPTOM_TRIAGE and not pending_action and is_symptom_triage_request(request.query):
@@ -605,24 +718,51 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 except (MCPWorkflowError, MCPClientError) as workflow_error:
                     fallback_reason = getattr(workflow_error, "reason", "mcp_client_error")
 
-                    # Convert ambiguous/low-confidence provider match into a numbered disambiguation flow
+                    # Convert ambiguous/low-confidence provider/clinic match into a numbered disambiguation flow
                     if (
                         ENABLE_PENDING_ACTION
                         and isinstance(workflow_error, MCPWorkflowError)
-                        and fallback_reason in {"provider_ambiguous", "provider_low_confidence"}
+                        and fallback_reason
+                        in {
+                            "provider_ambiguous",
+                            "provider_low_confidence",
+                            "provider_clinic_mismatch",
+                            "clinic_ambiguous",
+                        }
                         and getattr(workflow_error, "data", None)
                         and (workflow_error.data.get("candidates") or [])
                     ):
                         candidates = list(workflow_error.data.get("candidates") or [])
+                        pending_type = (
+                            "clinic_disambiguation"
+                            if fallback_reason == "clinic_ambiguous"
+                            else (
+                                "provider_clinic_mismatch"
+                                if fallback_reason == "provider_clinic_mismatch"
+                                else "provider_disambiguation"
+                            )
+                        )
                         pending = {
-                            "type": "provider_disambiguation",
+                            "type": pending_type,
                             "intent": decision.intent,
                             "turns_remaining": 2,
                             "original_question": state_input_query,
                             "candidates": candidates,
                         }
+                        if pending_type == "provider_clinic_mismatch":
+                            pending["requested_clinic"] = str(
+                                (workflow_error.data or {}).get("requested_clinic") or ""
+                            ).strip()
                         short_term_memory.save_pending_action(session_id, pending)
-                        prompt = _format_provider_disambiguation_prompt(candidates)
+                        if pending_type == "clinic_disambiguation":
+                            prompt = _format_clinic_disambiguation_prompt(candidates)
+                        elif pending_type == "provider_clinic_mismatch":
+                            prompt = _format_provider_clinic_mismatch_prompt(
+                                candidates,
+                                requested_clinic=pending.get("requested_clinic") or None,
+                            )
+                        else:
+                            prompt = _format_provider_disambiguation_prompt(candidates)
                         short_term_memory.add_message(session_id, "assistant", prompt)
                         audio_data, audio_size, has_audio = await _maybe_generate_audio(prompt)
                         return ChatResponseWithAudio(

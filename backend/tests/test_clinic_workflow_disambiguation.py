@@ -19,7 +19,8 @@ class FakeQAEngine:
 
 
 class FakeMCPClientAmbiguous:
-    async def match_doctor_hybrid(self, *, query: str, clinic_name=None, top_k=5, min_score_multi=0.6, min_score_single=0.55):
+    async def match_doctor_hybrid(self, **kwargs):
+        query = kwargs.get("query", "")
         return HybridMatchResponse(
             status=HybridMatchStatus.AMBIGUOUS_NEED_MORE_INFO,
             message="يوجد أكثر من دكتور بنفس الاسم.",
@@ -30,7 +31,7 @@ class FakeMCPClientAmbiguous:
                     provider_id="1",
                     clinic_id="10",
                     clinic_name="عيادة الباطنة",
-                    name_ar="بيمن عادل عزيز بساده",
+                    name_ar=query or "بيمن عادل عزيز بساده",
                     name_en="",
                     score=0.7,
                     token_overlap=0.7,

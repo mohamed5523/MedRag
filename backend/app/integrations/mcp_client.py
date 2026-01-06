@@ -76,6 +76,32 @@ class HybridMatchResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class ClinicMatchResult(BaseModel):
+    """A single clinic match result with scoring details."""
+
+    clinic_id: str
+    clinic_name: str
+    score: float = Field(..., description="Final similarity score (0–1)")
+    token_overlap: float = Field(..., description="Token overlap (0–1)")
+    fuzzy_name_score: float = Field(..., description="Fuzzy clinic-name score (0–1)")
+    order_score: float = Field(..., description="Ordered token score (0–1)")
+    matched_tokens: List[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ClinicMatchResponse(BaseModel):
+    """Response from the hybrid clinic matching operation."""
+
+    status: HybridMatchStatus
+    message: str
+    query_tokens: List[str]
+    best_match: Optional[ClinicMatchResult] = None
+    candidates: List[ClinicMatchResult] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="allow")
+
+
 class MCPBaseModel(BaseModel):
     """Base model that allows passthrough fields for future schema changes."""
 
@@ -672,6 +698,50 @@ class MCPClient:
             if result.best_match:
                 span.set_attribute("mcp.match.best_score", result.best_match.score)
             
+            return result
+
+    async def match_clinic_hybrid(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 0.65,
+    ) -> ClinicMatchResponse:
+        """
+        Match a clinic name using hybrid token-based and fuzzy matching.
+
+        Calls the MCP server's /clinics/match endpoint.
+        """
+        if not self.settings.enabled:
+            raise MCPClientError("MCP client is disabled via configuration.")
+
+        url = self._build_url(None, "/clinics/match")
+        params = {"query": query, "top_k": top_k, "min_score": min_score}
+
+        with tracer.start_as_current_span("mcp.match_clinic_hybrid") as span:
+            span.set_attribute("mcp.url", url)
+            span.set_attribute("mcp.params.query", query)
+            span.set_attribute("mcp.params.top_k", top_k)
+            span.set_attribute("mcp.params.min_score", min_score)
+
+            payload = await self._request_json(url, params=params, span=span)
+            try:
+                span.set_attribute(
+                    "mcp.response.preview",
+                    json.dumps(payload, ensure_ascii=False)[:1000],
+                )
+            except Exception:
+                logger.debug("Failed to serialize MCP clinic match payload for preview", exc_info=True)
+
+            try:
+                result = ClinicMatchResponse.model_validate(payload)
+            except ValidationError as exc:
+                raise MCPResponseValidationError(str(exc)) from exc
+
+            span.set_attribute("mcp.match.status", result.status.value)
+            span.set_attribute("mcp.match.candidates_count", len(result.candidates))
+            if result.best_match:
+                span.set_attribute("mcp.match.best_score", result.best_match.score)
+
             return result
 
     async def _request_json(

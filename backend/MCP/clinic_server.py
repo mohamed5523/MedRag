@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,7 @@ from matching_engine import (
     normalize_arabic,
     normalize_english,
     normalize_mixed_text,
+    tokenize_clinic,
     tokenize_name,
 )
 from mcp.server.fastmcp import FastMCP
@@ -73,6 +75,37 @@ class DoctorRecord(BaseModel):
     norm_name_en: str
     tokens: List[str]
 
+
+class ClinicMatch(BaseModel):
+    """A single clinic match result with scoring details."""
+
+    clinic_id: str
+    clinic_name: str
+    score: float = Field(..., description="Final similarity score (0–1)")
+    token_overlap: float = Field(..., description="Token overlap (0–1)")
+    fuzzy_name_score: float = Field(..., description="Fuzzy clinic-name score (0–1)")
+    order_score: float = Field(..., description="Ordered token score (0–1)")
+    matched_tokens: List[str] = Field(default_factory=list)
+
+
+class ClinicMatchResponse(BaseModel):
+    """Response from the hybrid clinic matching operation."""
+
+    status: MatchStatus
+    message: str
+    query_tokens: List[str]
+    best_match: Optional[ClinicMatch] = None
+    candidates: List[ClinicMatch] = Field(default_factory=list)
+
+
+class ClinicRecord(BaseModel):
+    """Internal representation of a clinic for matching."""
+
+    clinic_id: str
+    clinic_name: str
+    norm_name: str
+    tokens: List[str]
+
 # Create MCP server instance that also powers the HTTP shim
 mcp = FastMCP(
     "Clinic Management System",
@@ -80,6 +113,25 @@ mcp = FastMCP(
     port=SERVER_PORT,
 )
 settings = get_settings()
+
+# Provider list cache (helps scalability: avoid refetching on every match call)
+_PROVIDER_CACHE_TTL_SECONDS = float(os.getenv("PROVIDER_CACHE_TTL_SECONDS", "60"))
+_provider_cache: Dict[str, Any] = {"ts": 0.0, "payload": None}
+
+
+async def _get_provider_payload() -> Dict[str, Any]:
+    """Fetch and cache the provider list payload (JSON-decoded)."""
+    now = time.time()
+    cached = _provider_cache.get("payload")
+    ts = float(_provider_cache.get("ts") or 0.0)
+    if cached is not None and (now - ts) <= _PROVIDER_CACHE_TTL_SECONDS:
+        return cached
+
+    raw_data = await fetch_text(settings.provider_list_url, auth=settings.auth)
+    payload = json.loads(raw_data)
+    _provider_cache["payload"] = payload
+    _provider_cache["ts"] = now
+    return payload
 
 
 @mcp.tool()
@@ -210,6 +262,131 @@ def _parse_and_preprocess_providers(data: List[Dict[str, Any]]) -> List[DoctorRe
     return doctors
 
 
+def _parse_and_preprocess_clinics(data: List[Dict[str, Any]]) -> List[ClinicRecord]:
+    """Parse provider list response and preprocess clinic names for matching."""
+    clinics: List[ClinicRecord] = []
+    seen: set[str] = set()
+    for clinic in data:
+        clinic_id = str(clinic.get("clinicId", "")).strip()
+        clinic_name = str(clinic.get("clinicName", "")).strip()
+        if not clinic_id or clinic_id in seen:
+            continue
+        seen.add(clinic_id)
+        clinics.append(
+            ClinicRecord(
+                clinic_id=clinic_id,
+                clinic_name=clinic_name,
+                norm_name=normalize_mixed_text(clinic_name),
+                tokens=tokenize_clinic(clinic_name),
+            )
+        )
+    return clinics
+
+
+def _match_clinic_multi_token(
+    query_tokens: List[str],
+    clinics: List[ClinicRecord],
+    top_k: int,
+    min_score: float,
+) -> ClinicMatchResponse:
+    """Match a (tokenized) clinic query against all clinics."""
+    q_string = " ".join(query_tokens)
+    scored: List[ClinicMatch] = []
+
+    for c in clinics:
+        # 1) Token overlap using fuzzy token comparison (continuous, not binary).
+        #    This improves recall for typos like "المسا" vs "النسا".
+        overlap_sum = 0.0
+        matched_tokens: List[str] = []
+        for qt in query_tokens:
+            best_token_score = 0.0
+            for ct in c.tokens:
+                s = fuzz.ratio(qt, ct) / 100.0
+                if s > best_token_score:
+                    best_token_score = s
+            overlap_sum += best_token_score
+            if best_token_score >= 0.70:
+                matched_tokens.append(qt)
+        token_overlap = (overlap_sum / len(query_tokens)) if query_tokens else 0.0
+
+        # 2) Ordered sequence score
+        order_score = compute_order_score(query_tokens, c.tokens)
+
+        # 3) Fuzzy full-name similarity (WRatio is robust for typos/reordering)
+        full = c.norm_name or c.clinic_name
+        fuzzy_name_score = fuzz.WRatio(q_string, full) / 100.0 if full else 0.0
+
+        # Final score (tunable weights)
+        final_score = 0.45 * token_overlap + 0.20 * order_score + 0.35 * fuzzy_name_score
+        if final_score < min_score:
+            continue
+
+        scored.append(
+            ClinicMatch(
+                clinic_id=c.clinic_id,
+                clinic_name=c.clinic_name,
+                score=round(final_score, 4),
+                token_overlap=round(token_overlap, 4),
+                fuzzy_name_score=round(fuzzy_name_score, 4),
+                order_score=round(order_score, 4),
+                matched_tokens=matched_tokens,
+            )
+        )
+
+    if not scored:
+        return ClinicMatchResponse(
+            status=MatchStatus.NO_MATCH,
+            message="لم يتم العثور على عيادة بهذا الاسم.",
+            query_tokens=query_tokens,
+            candidates=[],
+        )
+
+    scored.sort(key=lambda m: (m.score, len(m.matched_tokens)), reverse=True)
+    top_matches = scored[:top_k]
+    best = top_matches[0]
+
+    if len(top_matches) == 1 or (
+        len(top_matches) > 1 and best.score >= 0.80 and (best.score - top_matches[1].score) >= 0.08
+    ):
+        return ClinicMatchResponse(
+            status=MatchStatus.UNAMBIGUOUS_MATCH,
+            message="تم العثور على عيادة مطابقة للاسم الذي أدخلته.",
+            query_tokens=query_tokens,
+            best_match=best,
+            candidates=top_matches,
+        )
+
+    return ClinicMatchResponse(
+        status=MatchStatus.AMBIGUOUS_NEED_MORE_INFO,
+        message="يوجد أكثر من عيادة بنفس الاسم أو قريب منه. من فضلك اكتب الاسم بشكل أوضح.",
+        query_tokens=query_tokens,
+        best_match=best,
+        candidates=top_matches,
+    )
+
+
+def _normalize_clinic_for_match(text: str) -> str:
+    """Normalize clinic text for forgiving matching (typos/variants, Arabic articles)."""
+    t = normalize_mixed_text(text)
+
+    # Common Arabic variants/typos in user input:
+    # - "النساؤ" vs "النساء" vs "نسا" (hamza/waaw-hamza forms)
+    # - Normalize away standalone hamza forms that often appear in misspellings
+    t = t.replace("ؤ", "").replace("ء", "").replace("ئ", "ي")
+
+    # Remove generic clinic words and leading definite article "ال"
+    stop = {"عياده", "عيادة", "عيادات", "قسم", "مركز"}
+    toks: List[str] = []
+    for tok in t.split():
+        if tok in stop:
+            continue
+        if tok.startswith("ال") and len(tok) > 3:
+            tok = tok[2:]
+        toks.append(tok)
+
+    return " ".join(toks)
+
+
 def _filter_candidates(
     doctors: List[DoctorRecord],
     clinic_id: Optional[str],
@@ -221,14 +398,18 @@ def _filter_candidates(
         cid = clinic_id.strip()
         candidates = [d for d in candidates if d.clinic_id == cid]
     if clinic_name:
-        norm_c = normalize_mixed_text(clinic_name)
+        norm_c = _normalize_clinic_for_match(clinic_name)
         candidates = [
             d
             for d in candidates
             # Bidirectional substring match: handles cases like
             # "عيادة نسا وتوليد" vs "نسا وتوليد"
-            if norm_c in normalize_mixed_text(d.clinic_name)
-               or normalize_mixed_text(d.clinic_name) in norm_c
+            if (
+                norm_c in _normalize_clinic_for_match(d.clinic_name)
+                or _normalize_clinic_for_match(d.clinic_name) in norm_c
+                or (fuzz.partial_ratio(norm_c, _normalize_clinic_for_match(d.clinic_name)) / 100.0)
+                >= 0.80
+            )
         ]
     return candidates
 
@@ -485,12 +666,8 @@ async def match_doctor_hybrid(
         - best_match: Best matching doctor (if found)
         - candidates: List of candidate matches with scores
     """
-    # Fetch provider list
-    raw_data = await fetch_text(
-        settings.provider_list_url,
-        auth=settings.auth,
-    )
-    payload = json.loads(raw_data)
+    # Fetch provider list (cached)
+    payload = await _get_provider_payload()
     
     if "data" not in payload:
         return json.dumps({
@@ -547,6 +724,46 @@ async def match_doctor_hybrid(
     return response.model_dump_json(by_alias=True)
 
 
+@mcp.tool()
+async def match_clinic_hybrid(
+    query: str,
+    top_k: int = 5,
+    min_score: float = 0.65,
+) -> str:
+    """Match a clinic name using hybrid token-based and fuzzy matching."""
+    payload = await _get_provider_payload()
+
+    if "data" not in payload:
+        return json.dumps(
+            {
+                "status": MatchStatus.NO_MATCH.value,
+                "message": "خطأ في جلب بيانات العيادات من النظام.",
+                "query_tokens": [],
+                "best_match": None,
+                "candidates": [],
+            },
+            ensure_ascii=False,
+        )
+
+    query_tokens = tokenize_clinic(query)
+    if not query_tokens:
+        response = ClinicMatchResponse(
+            status=MatchStatus.NO_MATCH,
+            message="لم أستطع فهم اسم العيادة. من فضلك اكتب اسم العيادة.",
+            query_tokens=[],
+        )
+        return response.model_dump_json(by_alias=True)
+
+    clinics = _parse_and_preprocess_clinics(payload["data"])
+    response = _match_clinic_multi_token(
+        query_tokens=query_tokens,
+        clinics=clinics,
+        top_k=top_k,
+        min_score=min_score,
+    )
+    return response.model_dump_json(by_alias=True)
+
+
 def _json_response_from_text(payload: str) -> Response:
     """Return JSONResponse when possible, otherwise fall back to plain text."""
     try:
@@ -564,6 +781,30 @@ def _parse_int(value: Optional[str], field: str) -> int:
 @mcp.custom_route("/providers", methods=["GET"])
 async def providers_route(_request: Request) -> Response:
     data = await get_clinic_provider_list()
+    return _json_response_from_text(data)
+
+
+@mcp.custom_route("/clinics/match", methods=["GET", "POST"])
+async def clinics_match_route(request: Request) -> Response:
+    """HTTP route for hybrid clinic matching."""
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            query = body.get("query", "")
+            top_k = _safe_int(body.get("top_k"), 5)
+            min_score = _safe_float(body.get("min_score"), 0.65)
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    else:
+        params = request.query_params
+        query = params.get("query", "")
+        top_k = _safe_int(params.get("top_k"), 5)
+        min_score = _safe_float(params.get("min_score"), 0.65)
+
+    if not query:
+        return JSONResponse({"error": "query parameter is required"}, status_code=400)
+
+    data = await match_clinic_hybrid(query=query, top_k=top_k, min_score=min_score)
     return _json_response_from_text(data)
 
 

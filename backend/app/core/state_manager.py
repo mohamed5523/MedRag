@@ -16,6 +16,8 @@ tracer = trace.get_tracer("medrag.state_manager")
 class Entities(BaseModel):
     doctor: Optional[str] = Field(None, description="Doctor name or null")
     clinic: Optional[str] = Field(None, description="Clinic name or null")
+    clinic_id: Optional[int] = Field(None, description="Resolved clinic id (if known) or null")
+    provider_id: Optional[int] = Field(None, description="Resolved provider id (if known) or null")
     hospital: Optional[str] = Field(None, description="Hospital name or null")
     symptoms: List[str] = Field(default_factory=list, description="List of symptoms mentioned")
     specialty: Optional[str] = Field(None, description="Medical specialty if mentioned or null")
