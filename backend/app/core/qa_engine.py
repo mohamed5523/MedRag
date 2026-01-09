@@ -51,6 +51,30 @@ class QAEngine:
         
         # Consider it Arabic if more than 50% of alphabetic characters are Arabic
         return total_chars > 0 and (arabic_chars / total_chars) > 0.5
+
+    def _normalize_arabic_ampm(self, text: str) -> str:
+        """
+        Normalize time-of-day markers for Arabic output.
+
+        Goal: prefer full words with tanween (صباحًا / مساءً) instead of abbreviations (ص/م) or AM/PM.
+        This is a best-effort post-processor to improve voice-readability and consistency.
+        """
+        if not text:
+            return text
+
+        out = text
+        # English AM/PM variants
+        out = re.sub(r"(?i)\bA\.?M\.?\b", "صباحًا", out)
+        out = re.sub(r"(?i)\bP\.?M\.?\b", "مساءً", out)
+
+        # Arabic single-letter markers after time tokens (supports "09:30م" and "09.30م")
+        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*ص\b", r"\1 صباحًا", out)
+        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*م\b", r"\1 مساءً", out)
+
+        # Normalize common non-tanween variants
+        out = re.sub(r"صباح(?:ا|اً|ً|ًا)", "صباحًا", out)
+        out = re.sub(r"مساء(?:ا|اً|ً|ًا)", "مساءً", out)
+        return out
     
     def build_time_context(self, question: str, now_dt: datetime | None = None) -> Dict[str, Any]:
         """Prepare date/time context strings for a query."""
@@ -80,7 +104,7 @@ class QAEngine:
             month_str = months_ar[now_dt.month - 1]
             date_hint = f"النهاردة {weekday_str}، {now_dt.day} {month_str} {now_dt.year}."
         else:
-            date_hint = f"Today is {now_dt.strftime('%A')}, {now_dt.strftime('%b %d, %Y')}\."
+            date_hint = f"Today is {now_dt.strftime('%A')}, {now_dt.strftime('%b %d, %Y')}."
 
         time_context_message = (
             f"{date_hint} Current timezone: {tz_name}. "
@@ -174,6 +198,7 @@ class QAEngine:
                     "\n"
                     "الأَرْقَام والأَوْقَات والتَّوَارِيخ: "
                     "مُمكِن تِكْتِبِيها بِالأَرْقَام عَادِي (زي 3:30 أو 27/10/2025)، والمُحرِّك هِيِقْرَاها بِصُوت مِصري صَحّ. "
+                    "ولَو هتِكْتِبي وَقْت بصيغة صباح/مساء، اكتُبِيهَا بالكَلِمَة كاملة: صباحًا أو مساءً، وماتِسْتَخْدِميش اختصارات ص أو م ولا AM أو PM. "
                     "\n"
                     "مَهْمَا يِكُون السُّؤَال، مَتِجَاوِبِيش غِير بِالاعْتِمَاد على المَعْلُومَات المَوْجُودَة فِي المَسْتَنَدَات الطِّبِّيَّة المُتَاحَة (context_str). "
                     "لَو المَعْلُومَة مِش مَوْجُودَة فِي المَسْتَنَدَات، قُولِي بِوُضُوح إنِّك مِش مُتَأَكِّدَة. "
@@ -206,6 +231,7 @@ class QAEngine:
 
 الرجاء تقديم إجابة شاملة بناءً على المعلومات المتاحة فقط.
 تذكّر استخدام العامية المصرية، والتشكيل على الكلمات المهمة بالطريقة اللي بتوضّح النُطق المِصري.
+ولو فيه وَقْت، اكتُبِيه بصيغة 3:30 صباحًا أو 3:30 مساءً، وماتِكْتِبيش ص أو م ولا AM أو PM.
 لو المعلومات ناقصة، قول بوضوح إنك مش متأكد.
 """
             else:
@@ -277,6 +303,8 @@ class QAEngine:
                 )
             
             answer = response.choices[0].message.content.strip()
+            if is_arabic:
+                answer = self._normalize_arabic_ampm(answer)
             
             # Get unique sources
             unique_sources = list(set(sources))
@@ -370,7 +398,8 @@ class QAEngine:
                     "٢. شَكِّلِي الكَلِمَات المُهِمَّة بالطَريقَة اللي بتُوَضِّح النُطق المِصري. "
                     "٣. لَوِ البَيَانات الرَسْمِيَّة مَوْجُودَة، اعْتَمِدِي عَلَيْهَا الأَوَّل. "
                     "٤. أَضِيفِي مَعْلُومَات طِبِّيَّة مِنَ المُسْتَنْدَات لَوْ كَانَتْ مُفِيدَة. "
-                    "٥. رُدِّي بِطَريقَة طَبِيعِيَّة وَمُريحَة للمَريض."
+                    "٥. رُدِّي بِطَريقَة طَبِيعِيَّة وَمُريحَة للمَريض. "
+                    "٦. لَو فيه وَقْت، اكتُبِيه بصيغة صباحًا أو مساءً، وماتِسْتَخْدِميش ص أو م ولا AM أو PM."
                 )
                 
                 user_message = f"""
@@ -384,6 +413,7 @@ class QAEngine:
 
 استخدمي البيانات الرسمية كأساس للإجابة، وأضيفي معلومات طبية من قاعدة المعرفة لو كانت مفيدة للمريض.
 تذكّري استخدام العامية المصرية والتشكيل على الكلمات المهمة.
+ولو فيه وَقْت، اكتُبِيه بصيغة 3:30 صباحًا أو 3:30 مساءً، وماتِكْتِبيش ص أو م ولا AM أو PM.
 """
             else:
                 system_prompt = (
@@ -441,6 +471,8 @@ Use the official data as the foundation for your answer, and add medical context
                 )
             
             answer = response.choices[0].message.content.strip()
+            if is_arabic:
+                answer = self._normalize_arabic_ampm(answer)
             unique_sources = list(set(sources + ["MCP Clinic System"]))
 
             try:

@@ -172,6 +172,7 @@ class TextToSpeech:
             "When offering reassurance or delivering sensitive information, lower your volume slightly, almost like a soft whisper, "
             "to create a sense of care and trust. "
             "Always sound approachable, confident, and genuinely eager to help."
+            "Speak in Egyptian Arabic. If a word is in another language, pronounce it naturally."
         )
 
         try:

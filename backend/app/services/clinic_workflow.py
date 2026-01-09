@@ -1185,11 +1185,24 @@ def _format_schedule(
     if doctor_name:
         header.append(f"الدكتور: {doctor_name}.")
 
+    def _normalize_ampm_for_ar(value: str) -> str:
+        """Prefer صباحًا/مساءً over ص/م or AM/PM in schedule display strings."""
+        if not value:
+            return value
+        out = value
+        out = re.sub(r"(?i)\bA\.?M\.?\b", "صباحًا", out)
+        out = re.sub(r"(?i)\bP\.?M\.?\b", "مساءً", out)
+        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*ص\b", r"\1 صباحًا", out)
+        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*م\b", r"\1 مساءً", out)
+        out = re.sub(r"صباح(?:ا|اً|ً|ًا)", "صباحًا", out)
+        out = re.sub(r"مساء(?:ا|اً|ً|ًا)", "مساءً", out)
+        return out
+
     grouped: Dict[str, List[str]] = defaultdict(list)
     for slot in response.slots:
         day = slot.day_name or f"اليوم #{slot.day_id}"
-        start = slot.shift_start or "غير محدد"
-        end = slot.shift_end or "غير محدد"
+        start = _normalize_ampm_for_ar(slot.shift_start or "غير محدد")
+        end = _normalize_ampm_for_ar(slot.shift_end or "غير محدد")
         grouped[day].append(f"{start} → {end}")
 
     for day, entries in grouped.items():
