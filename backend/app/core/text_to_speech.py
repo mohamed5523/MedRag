@@ -166,13 +166,22 @@ class TextToSpeech:
     async def _openai_synthesize(self, text: str, voice_name: str) -> bytes:
         """Call OpenAI TTS (gpt-4o-mini-tts) using the official Python SDK."""
         instructions = (
-            "Speak in a warm, empathetic, and supportive tone with natural emotional range. "
-            "Use gentle intonation that rises slightly at the end of questions to sound engaging and attentive. "
-            "Maintain a calm, friendly pace — not too fast, not too slow — to convey patience and professionalism. "
-            "When offering reassurance or delivering sensitive information, lower your volume slightly, almost like a soft whisper, "
-            "to create a sense of care and trust. "
-            "Always sound approachable, confident, and genuinely eager to help."
-            "Speak in Egyptian Arabic. If a word is in another language, pronounce it naturally."
+            "You are a helpful assistant that speaks in Egyptian Arabic dialect (Masri). "
+            "Speak in Egyptian Arabic dialect (Masri) using natural colloquial grammar and vocabulary, "
+            "not Modern Standard Arabic, Saudi Arabic, or any other dialect. "
+            "Use polite, professional Egyptian Arabic suitable for a helpful assistant "
+            "(friendly and respectful, not slang-heavy). "
+            "If a word is in another language, pronounce it naturally as a fluent Egyptian speaker would. "
+            "Speak in a warm, empathetic, and supportive tone with natural emotional variation. "
+            "Use gentle, expressive intonation, with a slight rise at the end of questions to sound engaged and attentive. "
+            "Maintain a calm, friendly speaking pace — clear and unhurried. "
+            "When offering reassurance or sensitive information, soften your delivery and slow slightly "
+            "to convey care, trust, and emotional presence. "
+            "Always sound approachable, confident, and genuinely eager to help.\n"
+            "Years: Read years as natural numbers (e.g., 2024 is 'alfayn arba'a we 'ishreen', not formal MSA). "
+            "Dates: Use Egyptian month names (e.g., Yanayer, Febrayer, Marays, April, Mayo, Yunyu, Yulyu, Aghostos, September, October, November, December). Read dates simply (e.g., 'واحد مايو' as 'wahed mayo'). "
+            "Times: Use the 12-hour clock with colloquial markers. Use 'we rob'' (and a quarter), 'we telt' (and a third/twenty past), 'noss' (half past), and 'illa' (to/minus). Add 'es-sobh' (morning) or 'be-leil' (night) instead of AM/PM. "
+            "Numbers: Use Egyptian pronunciations (e.g., 'Etneen' not 'Ithnayn', 'Talata' not 'Thalatha', 'Tamanya' not 'Thamaniya')"
         )
 
         try:

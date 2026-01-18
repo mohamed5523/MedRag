@@ -103,12 +103,19 @@ class QAEngine:
             weekday_str = weekday_ar.get(now_dt.strftime("%A"), now_dt.strftime("%A"))
             month_str = months_ar[now_dt.month - 1]
             date_hint = f"النهاردة {weekday_str}، {now_dt.day} {month_str} {now_dt.year}."
+            # Exact local time in a spoken-friendly form for Egyptian Arabic.
+            suffix = "صباحًا" if now_dt.hour < 12 else "مساءً"
+            hour12 = (now_dt.hour % 12) or 12
+            time_hint = f"{hour12}:{now_dt.minute:02d} {suffix}"
         else:
             date_hint = f"Today is {now_dt.strftime('%A')}, {now_dt.strftime('%b %d, %Y')}."
+            # Exact local time (24h) to ground relative time phrases.
+            time_hint = now_dt.strftime("%H:%M")
 
+        now_iso = now_dt.replace(second=0, microsecond=0).isoformat()
         time_context_message = (
-            f"{date_hint} Current timezone: {tz_name}. "
-            "Interpret relative dates (e.g., 'tomorrow') relative to this time."
+            f"{date_hint} Current local time: {time_hint}. Current timezone: {tz_name}. "
+            f"(Now: {now_iso}) Interpret relative dates/times (e.g., 'tomorrow', 'in 2 hours') relative to this time."
         )
 
         return {
@@ -116,20 +123,23 @@ class QAEngine:
             "tz_name": tz_name,
             "is_arabic": is_arabic,
             "date_hint": date_hint,
+            "time_hint": time_hint,
+            "now_iso": now_iso,
             "time_context_message": time_context_message,
         }
 
     def rewrite_query_with_date_hint(
         self, question: str, time_context: Dict[str, Any] | None = None
     ) -> tuple[str, Dict[str, Any]]:
-        """Append the computed date hint to the user query."""
+        """Append the computed date/time hints to the user query."""
 
         ctx = time_context or self.build_time_context(question)
         date_hint = ctx["date_hint"]
+        time_hint = ctx.get("time_hint", "")
         tz_name = ctx["tz_name"]
         rewritten = (
             f"{question.strip()}\n\n"
-            f"Date hint: {date_hint} Current timezone: {tz_name}."
+            f"Date hint: {date_hint} Time hint: {time_hint} Current timezone: {tz_name}."
         )
         return rewritten, ctx
 
@@ -243,37 +253,9 @@ class QAEngine:
 
 الرجاء تقديم إجابة شاملة بناءً على المعلومات المتاحة فقط.
 """
-            
-            # Add time context based on Egypt timezone (Africa/Cairo) to ground relative dates
-            tz_name = os.getenv("DEFAULT_TZ", "Africa/Cairo")
-            if now_dt is None:
-                now_dt = datetime.now(ZoneInfo(tz_name)) if ZoneInfo else datetime.now()
 
-            weekday_ar = {
-                "Saturday": "السبت",
-                "Sunday": "الأحد",
-                "Monday": "الاتنين",
-                "Tuesday": "التلات",
-                "Wednesday": "الأربع",
-                "Thursday": "الخميس",
-                "Friday": "الجمعة",
-            }
-            months_ar = [
-                "يناير","فبراير","مارس","أبريل","مايو","يونيو",
-                "يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر",
-            ]
-
-            if is_arabic:
-                weekday_str = weekday_ar.get(now_dt.strftime("%A"), now_dt.strftime("%A"))
-                month_str = months_ar[now_dt.month - 1]
-                date_hint = f"النهاردة {weekday_str}، {now_dt.day} {month_str} {now_dt.year}."
-            else:
-                date_hint = f"Today is {now_dt.strftime('%A')}, {now_dt.strftime('%b %d, %Y')}."
-
-            time_context_message = (
-                f"{date_hint} Current timezone: {tz_name}. "
-                f"Interpret relative dates (e.g., 'tomorrow') relative to this time."
-            )
+            # Use the precomputed time context (date + exact time) to ground relative phrases.
+            time_context_message = ctx["time_context_message"]
 
             # Build conversation with optional prior history
             messages: List[Dict[str, str]] = [
