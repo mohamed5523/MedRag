@@ -54,3 +54,13 @@ dependencies = [
 members = [
     "MCP",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: integration tests that require running services (e.g., MCP server)",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

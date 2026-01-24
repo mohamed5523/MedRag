@@ -421,61 +421,102 @@ def _match_single_token(
     min_score: float,
 ) -> MatchResponse:
     """Match a single-token query against doctor candidates."""
-    scored: List[DoctorMatch] = []
+    # Split results into "strong" (>= min_score) and "weak" (near-miss) so we can
+    # return LOW_CONFIDENCE suggestions instead of hard NO_MATCH.
+    strong: List[DoctorMatch] = []
+    weak: List[DoctorMatch] = []
+
+    # Recall-friendly knobs (tunable)
+    POS_SIM_BASE = 0.70
+    HIT_THRESHOLD = 0.70
+    # Respect caller intent: LOW_CONF_MIN must never exceed min_score.
+    LOW_CONF_MIN = max(0.0, min_score - 0.20)
 
     for d in candidates:
-        pos_score, matched_first = compute_positional_token_weight(token, d.tokens)
+        # Positional similarity threshold: be more forgiving for short tokens (common in Arabic surnames)
+        pos_threshold = 0.65 if len(token) <= 4 else POS_SIM_BASE
+        # Keep threshold logic consistent with positional matching (and with _match_multi_token).
+        hit_threshold = 0.65 if len(token) <= 4 else HIT_THRESHOLD
+        pos_score, matched_first = compute_positional_token_weight(
+            token,
+            d.tokens,
+            similarity_threshold=pos_threshold,
+        )
 
-        # Fuzzy full-name similarity (Arabic & English)
-        q_str = token
+        # Continuous similarity to any name token (fixes cases like "عبدو" ~ "عبده")
+        token_sim = 0.0
+        for dt in d.tokens:
+            s = fuzz.ratio(token, dt) / 100.0
+            if s > token_sim:
+                token_sim = s
+
         full_ar = d.norm_name_ar or d.name_ar
         full_en = d.norm_name_en or d.name_en
 
-        fuzzy_ar = fuzz.ratio(q_str, full_ar) / 100.0 if full_ar else 0.0
-        fuzzy_en = fuzz.ratio(q_str, full_en) / 100.0 if full_en else 0.0
+        # More forgiving than ratio for partials/variants
+        fuzzy_ar = fuzz.WRatio(token, full_ar) / 100.0 if full_ar else 0.0
+        fuzzy_en = fuzz.WRatio(token, full_en) / 100.0 if full_en else 0.0
         fuzzy_name_score = max(fuzzy_ar, fuzzy_en)
 
-        # Overlap is binary in single-token (hit or miss)
-        token_overlap = 1.0 if pos_score > 0 else 0.0
+        # Use continuous overlap rather than binary (max recall)
+        token_overlap = token_sim
 
-        # Final score: position is dominant here
-        final_score = 0.6 * pos_score + 0.4 * fuzzy_name_score
+        # Final score (tunable weights)
+        final_score = 0.45 * token_overlap + 0.35 * pos_score + 0.20 * fuzzy_name_score
 
-        # Filter by final_score (consistent with _match_multi_token)
-        if final_score < min_score:
+        if final_score < LOW_CONF_MIN:
             continue
 
-        scored.append(
-            DoctorMatch(
-                provider_id=d.provider_id,
-                clinic_id=d.clinic_id,
-                clinic_name=d.clinic_name,
-                name_ar=d.name_ar,
-                name_en=d.name_en,
-                score=round(final_score, 4),
-                token_overlap=round(token_overlap, 4),
-                fuzzy_name_score=round(fuzzy_name_score, 4),
-                position_score=round(pos_score, 4),
-                matched_by_first_name=matched_first,
-                matched_tokens=[token],
-            )
+        match = DoctorMatch(
+            provider_id=d.provider_id,
+            clinic_id=d.clinic_id,
+            clinic_name=d.clinic_name,
+            name_ar=d.name_ar,
+            name_en=d.name_en,
+            score=round(final_score, 4),
+            token_overlap=round(token_overlap, 4),
+            fuzzy_name_score=round(fuzzy_name_score, 4),
+            position_score=round(pos_score, 4),
+            matched_by_first_name=matched_first,
+            matched_tokens=[token] if token_sim >= hit_threshold else [],
         )
 
-    if not scored:
+        if final_score >= min_score:
+            strong.append(match)
+        else:
+            weak.append(match)
+
+    if not strong:
+        if not weak:
+            return MatchResponse(
+                status=MatchStatus.NO_MATCH,
+                message="لم يتم العثور على دكتور بهذا الاسم.",
+                query_tokens=[token],
+                candidates=[],
+            )
+
+        # Return LOW_CONFIDENCE suggestions for near-misses (maximize recall UX)
+        weak.sort(
+            key=lambda m: (m.score, 1 if m.matched_by_first_name else 0),
+            reverse=True,
+        )
+        top_matches = weak[:top_k]
+        best = top_matches[0]
         return MatchResponse(
-            status=MatchStatus.NO_MATCH,
-            message="لم يتم العثور على دكتور بهذا الاسم.",
+            status=MatchStatus.LOW_CONFIDENCE,
+            message="مش متأكد من الاسم. هل تقصد أحد الأسماء دي؟",
             query_tokens=[token],
-            candidates=[],
+            best_match=best,
+            candidates=top_matches,
         )
 
     # Sort by score, then prefer first-name matches as tie-breaker
-    scored.sort(
+    strong.sort(
         key=lambda m: (m.score, 1 if m.matched_by_first_name else 0),
         reverse=True,
     )
 
-    top_matches = scored[:top_k]
+    top_matches = strong[:top_k]
     first_name_matches = [m for m in top_matches if m.matched_by_first_name]
 
     # Case 1: exactly one strong first-name match
@@ -521,11 +562,18 @@ def _match_multi_token(
 ) -> MatchResponse:
     """Match a multi-token query against doctor candidates."""
     q_string = " ".join(query_tokens)
-    scored: List[DoctorMatch] = []
+    strong: List[DoctorMatch] = []
+    weak: List[DoctorMatch] = []
+
+    # Recall-friendly knobs (tunable)
+    POS_SIM_BASE = 0.70
+    HIT_THRESHOLD = 0.70
+    # Respect caller intent: LOW_CONF_MIN must never exceed min_score.
+    LOW_CONF_MIN = max(0.0, min_score - 0.20)
 
     for d in candidates:
-        # 1) Token overlap using fuzzy token comparison
-        overlap_count = 0
+        # 1) Continuous token overlap (like clinic matcher): average best fuzzy token score
+        overlap_sum = 0.0
         matched_tokens: List[str] = []
         for qt in query_tokens:
             best_token_score = 0.0
@@ -533,16 +581,24 @@ def _match_multi_token(
                 s = fuzz.ratio(qt, dt) / 100.0
                 if s > best_token_score:
                     best_token_score = s
-            if best_token_score >= 0.85:
-                overlap_count += 1
+            overlap_sum += best_token_score
+
+            # Be more forgiving for short tokens (e.g., "عبدو" vs "عبده")
+            hit_threshold = 0.65 if len(qt) <= 4 else HIT_THRESHOLD
+            if best_token_score >= hit_threshold:
                 matched_tokens.append(qt)
-        token_overlap = overlap_count / len(query_tokens)
+        token_overlap = (overlap_sum / len(query_tokens)) if query_tokens else 0.0
 
         # 2) Positional score: average positional weight over tokens
         positional_scores: List[float] = []
         any_first = False
         for qt in query_tokens:
-            pos_score, matched_first = compute_positional_token_weight(qt, d.tokens)
+            pos_threshold = 0.65 if len(qt) <= 4 else POS_SIM_BASE
+            pos_score, matched_first = compute_positional_token_weight(
+                qt,
+                d.tokens,
+                similarity_threshold=pos_threshold,
+            )
             positional_scores.append(pos_score)
             any_first = any_first or matched_first
         avg_pos_score = (
@@ -558,38 +614,56 @@ def _match_multi_token(
         full_ar = d.norm_name_ar or d.name_ar
         full_en = d.norm_name_en or d.name_en
 
-        fuzzy_ar = fuzz.ratio(q_string, full_ar) / 100.0 if full_ar else 0.0
-        fuzzy_en = fuzz.ratio(q_string, full_en) / 100.0 if full_en else 0.0
+        # WRatio is more forgiving for typos/reordering (maximize recall)
+        fuzzy_ar = fuzz.WRatio(q_string, full_ar) / 100.0 if full_ar else 0.0
+        fuzzy_en = fuzz.WRatio(q_string, full_en) / 100.0 if full_en else 0.0
         fuzzy_name_score = max(fuzzy_ar, fuzzy_en)
 
         # Final score (tunable weights)
         final_score = (
-            0.35 * token_overlap
-            + 0.25 * avg_pos_score
-            + 0.2 * order_score
-            + 0.2 * fuzzy_name_score
+            0.45 * token_overlap
+            + 0.30 * avg_pos_score
+            + 0.05 * order_score
+            + 0.20 * fuzzy_name_score
         )
 
-        if final_score < min_score:
+        if final_score < LOW_CONF_MIN:
             continue
 
-        scored.append(
-            DoctorMatch(
-                provider_id=d.provider_id,
-                clinic_id=d.clinic_id,
-                clinic_name=d.clinic_name,
-                name_ar=d.name_ar,
-                name_en=d.name_en,
-                score=round(final_score, 4),
-                token_overlap=round(token_overlap, 4),
-                fuzzy_name_score=round(fuzzy_name_score, 4),
-                position_score=round(max(avg_pos_score, order_score), 4),
-                matched_by_first_name=any_first,
-                matched_tokens=matched_tokens,
-            )
+        match = DoctorMatch(
+            provider_id=d.provider_id,
+            clinic_id=d.clinic_id,
+            clinic_name=d.clinic_name,
+            name_ar=d.name_ar,
+            name_en=d.name_en,
+            score=round(final_score, 4),
+            token_overlap=round(token_overlap, 4),
+            fuzzy_name_score=round(fuzzy_name_score, 4),
+            position_score=round(max(avg_pos_score, order_score), 4),
+            matched_by_first_name=any_first,
+            matched_tokens=matched_tokens,
         )
 
-    if not scored:
+        if final_score >= min_score:
+            strong.append(match)
+        else:
+            weak.append(match)
+
+    if not strong:
+        if weak:
+            weak.sort(
+                key=lambda m: (m.score, len(m.matched_tokens), 1 if m.matched_by_first_name else 0),
+                reverse=True,
+            )
+            top_matches = weak[:top_k]
+            best = top_matches[0]
+            return MatchResponse(
+                status=MatchStatus.LOW_CONFIDENCE,
+                message="مش متأكد من الاسم. هل تقصد أحد الأسماء دي؟",
+                query_tokens=query_tokens,
+                best_match=best,
+                candidates=top_matches,
+            )
         return MatchResponse(
             status=MatchStatus.NO_MATCH,
             message="لم يتم العثور على دكتور بهذا الاسم.",
@@ -598,12 +672,12 @@ def _match_multi_token(
         )
 
     # Sort by score descending; tie-break: more matched tokens, then first-name usage
-    scored.sort(
+    strong.sort(
         key=lambda m: (m.score, len(m.matched_tokens), 1 if m.matched_by_first_name else 0),
         reverse=True,
     )
 
-    top_matches = scored[:top_k]
+    top_matches = strong[:top_k]
     best = top_matches[0]
 
     # Decide ambiguity vs unambiguous
