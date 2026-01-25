@@ -68,14 +68,100 @@ def normalize_mixed_text(text: str) -> str:
     return text.strip()
 
 
+def _expand_person_name_tokens(tokens: List[str]) -> List[str]:
+    """
+    Expand Arabic person-name tokens to handle common join/split orthographic variants.
+
+    Motivating examples (DB + user input can contain either form):
+      - "عبدالله"  <->  "عبد الله"
+      - "عبدالرحيم" <-> "عبد الرحيم" (and sometimes "عبد رحيم")
+      - "عوضالله"  <->  "عوض الله"
+      - "جادالله"  <->  "جاد الله"
+
+    Important: this function is intentionally conservative and only adds variants for
+    tokens that clearly match these patterns. Names that don't contain these patterns
+    are returned unchanged (aside from de-duping).
+    """
+    ALLAH = "الله"
+
+    if not tokens:
+        return []
+
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def add(tok: str) -> None:
+        tok = (tok or "").strip()
+        if not tok or len(tok) <= 1:
+            return
+        if tok in TITLE_STOPWORDS:
+            return
+        if tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+
+    # --- 1) Token-local expansions (split) ---
+    for tok in tokens:
+        tok = (tok or "").strip()
+        if not tok:
+            continue
+
+        # "عبدالرحيم" / "عبدالله" / "عبدالملاك" ... → add: "عبد", "الرحيم"/"الله"/...
+        if tok.startswith("عبد") and len(tok) > 3:
+            rest = tok[3:]
+            add("عبد")
+            if len(rest) > 1:
+                add(rest)
+                # Also allow users who omit the definite article "ال" ("عبد رحيم")
+                if rest.startswith("ال") and len(rest) > 3 and rest != ALLAH:
+                    add(rest[2:])
+            # Keep the original compound token too (helps exact / single-token queries)
+            add(tok)
+            continue
+
+        # "*الله" suffix compounds (e.g., "جادالله", "نصرالله") → add: "جاد", "الله"
+        if tok.endswith(ALLAH) and len(tok) > len(ALLAH):
+            stem = tok[: -len(ALLAH)]
+            if len(stem) > 1:
+                add(stem)
+            add(ALLAH)
+            add(tok)
+            continue
+
+        # Base token (no expansion)
+        add(tok)
+
+    # --- 2) Cross-token expansions (join) ---
+    # Join patterns that appear spaced in some data sources: "عبد الله" → "عبدالله", "عوض الله" → "عوضالله"
+    for i in range(len(tokens) - 1):
+        a = (tokens[i] or "").strip()
+        b = (tokens[i + 1] or "").strip()
+        if not a or not b:
+            continue
+
+        # "عبد" + ("الله" or "ال...") → "عبدالله"/"عبدالرحيم"
+        if a == "عبد" and (b == ALLAH or (b.startswith("ال") and len(b) > 3)):
+            add(a + b)
+            # Optional: if user omits "ال" in the second part, still allow joined form.
+            if b.startswith("ال") and len(b) > 3 and b != ALLAH:
+                add(a + b[2:])
+
+        # "<stem>" + "الله" → "<stem>الله"
+        if b == ALLAH and len(a) > 1 and a not in TITLE_STOPWORDS:
+            add(a + b)
+
+    # Preserve order but de-dupe (already enforced by `seen`)
+    return out
+
+
 def tokenize_name(text: str) -> List[str]:
     """Tokenize a name into meaningful tokens, removing stopwords."""
     norm = normalize_mixed_text(text)
-    tokens = norm.split()
-    return [
-        t for t in tokens
+    base_tokens = [
+        t for t in norm.split()
         if len(t) > 1 and t not in TITLE_STOPWORDS
     ]
+    return _expand_person_name_tokens(base_tokens)
 
 
 CLINIC_STOPWORDS = {
