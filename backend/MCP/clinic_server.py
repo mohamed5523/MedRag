@@ -829,6 +829,53 @@ async def match_clinic_hybrid(
         return response.model_dump_json(by_alias=True)
 
     clinics = _parse_and_preprocess_clinics(payload["data"])
+
+    # ------------------------------------------------------------------
+    # Special-case: generic "الجراحة/جراحة" should resolve to base "جراحه"
+    # ------------------------------------------------------------------
+    # Users often ask: "عيادة الجراحة" as a generic clinic (one-word), and the
+    # matcher correctly finds multiple prefixes (جراحه تجميل, جراحه مخ..., ...).
+    # For this specific clinic only, we want to skip disambiguation and pick the
+    # base clinic record whose tokens are exactly ["جراحه"].
+    #
+    # Important: apply the rule on *tokenized clinic text*, not on the full
+    # user sentence length. This also covers phrases like "الجراحة الاسبوع ده"
+    # if the upstream extraction mistakenly includes time context words.
+    _SURGERY_TOKEN = "جراحه"
+    _SURGERY_CONTEXT_TOKENS = {
+        # Common time/context tails that might leak into clinic text
+        "اسبوع",
+        "شهر",
+        "سنه",
+        "ده",
+        "هذا",
+        "هذه",
+        "هذة",
+        "حالي",
+        "قادم",
+        "جاي",
+    }
+    core_tokens = [t for t in query_tokens if t not in _SURGERY_CONTEXT_TOKENS]
+    if core_tokens == [_SURGERY_TOKEN]:
+        base = next((c for c in clinics if c.tokens == [_SURGERY_TOKEN]), None)
+        if base is not None:
+            forced = ClinicMatch(
+                clinic_id=base.clinic_id,
+                clinic_name=base.clinic_name,
+                score=1.0,
+                token_overlap=1.0,
+                fuzzy_name_score=1.0,
+                order_score=1.0,
+                matched_tokens=[_SURGERY_TOKEN],
+            )
+            response = ClinicMatchResponse(
+                status=MatchStatus.UNAMBIGUOUS_MATCH,
+                message="تم العثور على عيادة مطابقة للاسم الذي أدخلته.",
+                query_tokens=query_tokens,
+                best_match=forced,
+                candidates=[forced],
+            )
+            return response.model_dump_json(by_alias=True)
     response = _match_clinic_multi_token(
         query_tokens=query_tokens,
         clinics=clinics,
