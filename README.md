@@ -1,217 +1,117 @@
-# MedRAG - Hospital RAG System Demo
+# MedRag - Intelligent Hospital RAG System 🏥
 
-## 🏥 Project Overview
+MedRag is a sophisticated hospital management system that leverages Retrieval-Augmented Generation (RAG) to provide AI-powered assistance to patients and hospital staff. The system integrates modern web technologies with advanced AI capabilities to streamline hospital operations and enhance patient experience.
 
-MedRAG is an intelligent hospital management system that uses Retrieval-Augmented Generation (RAG) to process medical documents and provide AI-powered assistance to patients and hospital staff. This demo showcases a modern web interface for the complete system.
-
-## ✨ Features
+## ✨ Key Features
 
 ### 👥 Role-Based Access
+- **Patient Interface**: 
+    - AI-powered chat assistant for medical inquiries
+    - Voice interaction support (Speech-to-Text & Text-to-Speech)
+    - WhatsApp integration for seamless communication
+- **Hospital Manager Dashboard**:
+    - Comprehensive analytics and reporting
+    - Document management system
+    - Real-time monitoring of system performance
 
-- **Patient Interface**: Chat-based AI assistant for finding doctor information, appointments, and hospital services
-- **Hospital Manager Dashboard**: Analytics, document management, and system oversight
-- **Voice Interface**: Speech-to-text interaction for accessibility
+### 🤖 AI Capabilities
+- **Intelligent RAG**: Context-aware responses based on uploaded medical documents
+- **Multi-Modal Interaction**: Support for text and voice commands
+- **Advanced NLP**: High-accuracy natural language understanding for Egyptian Arabic and English
+- **TTS Normalization**: Specialized text-to-speech normalization for natural-sounding Arabic output
 
-### 🤖 AI-Powered Capabilities
-
-- **Document Processing**: Upload and process PDFs and text files containing doctor profiles and medical information
-- **Natural Language Queries**: Ask questions in plain English about doctors, appointments, and hospital policies
-- **Smart Responses**: Context-aware answers based on uploaded documents
-- **Voice Interaction**: Hands-free conversation with the AI assistant
-
-### 📊 Management Features
-
-- **Analytics Dashboard**: Usage statistics, query tracking, and performance metrics
-- **Document Management**: Upload, process, and monitor medical documents
-- **Query Logging**: Track all patient interactions for quality assurance
-- **Real-time Monitoring**: Live statistics and system health metrics
+### 📊 Management Tools
+- **Analytics Dashboard**: Visual insights into query patterns and system usage
+- **Document Processing**: Automated ingestion and vectorization of PDF and text documents
+- **Query Logging**: Detailed logs for quality assurance and system improvement
 
 ## 🏗️ Technical Architecture
 
-### Frontend Stack
+### Frontend
+- **Framework**: React 18 with TypeScript
+- **Styling**: Tailwind CSS with custom medical theme
+- **UI Components**: shadcn/ui library
+- **State Management**: React Query
+- **Routing**: React Router
 
-- **React 18** with TypeScript
-- **Tailwind CSS** for styling with custom medical theme
-- **shadcn/ui** component library
-- **React Router** for navigation
-- **React Query** for state management
-
-### Planned Backend Integration (Requires Supabase)
-
-- **Document Storage**: Secure file upload and management
-- **Vector Database**: Embeddings for semantic search
-- **Edge Functions**: AI processing with OpenAI/Azure integration
-- **Authentication**: Role-based access control
-- **Real-time Features**: Live chat and notifications
+### Backend
+- **API Framework**: FastAPI (Python)
+- **Database**: 
+    - Supabase (PostgreSQL) for relational data
+    - ChromaDB (local) for vector embeddings
+- **AI/ML**:
+    - OpenAI/Azure OpenAI for LLM and embeddings
+    - ElevenLabs/OpenAI for Text-to-Speech
+    - Whisper for Speech-to-Text
 
 ## 🚀 Getting Started
 
-### Demo Mode (Current)
+### Prerequisites
+- Node.js (v18+)
+- Python (3.10+)
+- Docker & Docker Compose (optional)
 
-The current implementation is a fully functional demo with:
+### Local Development Setup
 
-- Beautiful, responsive UI
-- Mock data and simulated interactions
-- Complete user flows for both patients and managers
-- Voice interface simulation
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/mohamed5523/MedRag.git
+   cd MedRag
+   ```
 
-### Production Setup (Requires Supabase)
+2. **Backend Setup**
+   ```bash
+   cd backend
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
 
-To implement the full RAG system:
+3. **Frontend Setup**
+   ```bash
+   cd frontend
+   npm install
+   ```
 
-1. **Connect to Supabase**
-   - Click the Supabase button in Lovable
-   - Set up database tables for documents, users, and queries
-   - Configure authentication and RLS policies
+4. **Environment Configuration**
+   - Create a `.env` file in the root directory (see `.env.example` if available)
+   - Configure necessary API keys (OpenAI, Supabase, ElevenLabs)
 
-2. **Add AI Integration**
-   - Configure OpenAI or Azure OpenAI API keys
-   - Set up edge functions for document processing
-   - Implement vector embeddings for semantic search
+5. **Run the Application**
+   ```bash
+   # Terminal 1: Backend
+   cd backend
+   uvicorn app.main:app --reload --port 8000
 
-3. **Document Processing Pipeline**
-   - PDF text extraction
-   - Text chunking and embedding generation
-   - Vector storage and retrieval
+   # Terminal 2: Frontend
+   cd frontend
+   npm run dev
+   ```
 
-## 📋 Implementation Plan
+### 🐳 Docker Deployment
 
-### Phase 1: Backend Setup ✅ (Demo Complete)
+The project includes a `docker-compose.yml` for easy deployment.
 
-- [x] UI/UX Design System
-- [x] Component Architecture
-- [x] Routing and Navigation
-- [x] Mock Data Integration
-
-### Phase 2: Supabase Integration (Next Steps)
-
-- [ ] Database schema design
-- [ ] Authentication system
-- [ ] File storage configuration
-- [ ] Edge function setup
-
-### Phase 3: AI Integration
-
-- [ ] OpenAI/Azure API integration
-- [ ] Document processing pipeline
-- [ ] Vector database setup
-- [ ] RAG query implementation
-
-### Phase 4: Advanced Features
-
-- [ ] Real-time chat
-- [ ] Voice-to-text integration
-- [ ] Advanced analytics
-- [ ] Mobile responsiveness
+```bash
+docker-compose up -d --build
+```
 
 ## 🔧 Configuration
 
-### Environment Variables (Supabase)
+### Environment Variables
+Key environment variables required for the system:
 
 ```env
-SUPABASE_URL=your_supabase_url
-SUPABASE_ANON_KEY=your_supabase_anon_key
-OPENAI_API_KEY=your_openai_api_key
-AZURE_OPENAI_ENDPOINT=your_azure_endpoint
+OPENAI_API_KEY=your_key
+SUPABASE_URL=your_url
+SUPABASE_KEY=your_key
+ELEVENLABS_API_KEY=your_key
 ```
-
-### Document Processing Settings
-
-- **Supported Formats**: PDF, TXT, DOCX
-- **Max File Size**: 10MB per document
-- **Processing Time**: ~30 seconds per document
-- **Embedding Model**: text-embedding-ada-002 (OpenAI) or text-embedding-ada-002 (Azure)
-
-## 🎯 User Flows
-
-### Patient Journey
-
-1. **Access System** → Select "Patient Access"
-2. **Chat Interface** → Ask questions about doctors/appointments
-3. **Voice Option** → Switch to voice interaction if needed
-4. **Get Answers** → Receive AI-powered responses based on hospital documents
-
-### Manager Journey
-
-1. **Admin Access** → Select "Hospital Manager"
-2. **Dashboard Overview** → View system statistics and metrics
-3. **Document Management** → Upload and process new medical documents
-4. **Query Analysis** → Review patient interactions and system performance
-
-## 🔒 Security & Compliance
-
-- **Role-Based Access Control**: Separate interfaces for patients vs managers
-- **Data Privacy**: Patient queries are logged anonymously
-- **Document Security**: Encrypted storage and processing
-- **HIPAA Considerations**: Designed with healthcare privacy in mind
-
-## 📱 Responsive Design
-
-- **Mobile-First**: Optimized for all device sizes
-- **Accessibility**: WCAG 2.1 compliant design
-- **Performance**: Optimized loading and interactions
-- **PWA Ready**: Can be installed as a progressive web app
-
-## 🛠️ Development
-
-### Local Development
-
-```bash
-# 1) Install Node deps (root) and Python deps (backend)
-npm install
-python -m venv .venv && source .venv/bin/activate
-pip install -r backend/requirements.txt || uv pip install -r backend/requirements.txt
-
-# 2) Set environment variables
-# Create a .env file at project root (used by Vite) with:
-# VITE_SUPABASE_URL=your_supabase_url
-# VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-# Optionally set backend env in backend/.env:
-# OPENAI_API_KEY=your_openai_api_key
-# API_HOST=0.0.0.0
-# API_PORT=8000
-
-# 3) Run frontend and backend together
-npm run dev
-```
-
-### Build for Production
-
-```bash
-npm run build
-```
-
-### Deploy
-
-Use Lovable's built-in deployment or connect to your preferred hosting platform.
-
-## 🔌 Supabase Integration
-
-- Frontend reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from environment variables (no keys are hardcoded).
-- Database schema and RLS policies are provided under `supabase/migrations/` (profiles, documents, doctors, schedules, appointments, chat_logs, document_embeddings, and a private `documents` storage bucket).
-- Manager dashboard uses Supabase Storage (bucket `documents`) and the `documents` table for metadata. Ensure storage policies from migrations are applied.
-- Authentication and profiles are handled by `src/hooks/useAuth.tsx` using Supabase Auth and a `profiles` table (with roles: patient, staff, manager).
-
-## ▶️ One-Command Dev
-
-The root script `npm run dev` runs both the Vite frontend (port 8080 with API proxy) and the FastAPI backend (port 8000). The proxy forwards `/api`, `/health`, and `/docs` to the backend.
-
-## 📈 Future Enhancements
-
-- **Multi-language Support**: Translate interface and AI responses
-- **Advanced Analytics**: Machine learning insights on query patterns
-- **Integration APIs**: Connect with existing hospital systems
-- **Mobile App**: Native iOS/Android applications
-- **Workflow Automation**: Automated appointment scheduling
 
 ## 🤝 Contributing
 
-This is a proof-of-concept demo. For production implementation, connect to Supabase and follow the implementation plan above.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is part of a demonstration for hospital management systems. All medical data used is fictional and for demo purposes only.
-
----
-
-**Ready to implement the full RAG system?** Connect to Supabase to unlock the complete functionality with real document processing, AI integration, and database storage.
+This project is licensed for use as a demonstration of hospital management systems. All medical data used is fictional.
