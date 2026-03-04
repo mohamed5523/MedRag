@@ -28,7 +28,7 @@ const PatientDashboard = () => {
     const now = new Date();
     const hourEEST = (now.getUTCHours() + 3) % 24; // EEST = UTC+3
     const greeting = hourEEST < 12 ? 'صَبَاح الخِير' : 'مَسَاء الخِير';
-    return `${greeting} يا أفندم، مع حضرتك المساعد الشخصي، اسمي كيميت. إزاي أقدر أساعدك النهاردة؟`;
+    return `${greeting} يا أفندم، مع حضرتك المساعد الشخصي، اسمي كيمت. إزاي أقدر أساعدك النهاردة؟`;
     // return `${greeting} يا أَفَندِم، مَع حَضْرِتِك المُساعِد الشَّخصِي، وَاِسمِي كيمِت، مِن مُستَشفَى مار مَرقُس. مُمكِن أَساعِد حَضْرِتِك إِزَّاي؟`;
   })();
   const [messages, setMessages] = useState<Message[]>([
@@ -43,6 +43,7 @@ const PatientDashboard = () => {
   const [isListening, setIsListening] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [canAutoplay, setCanAutoplay] = useState(false);
+  const [userGender, setUserGender] = useState<'male' | 'female'>('male');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const generateSessionId = () => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -224,7 +225,11 @@ const PatientDashboard = () => {
       const resp = await fetch("/api/chat/query-with-voice", {
         method: "POST",
         headers,
-        body: JSON.stringify({ query: outgoing, max_results: 5 })
+        body: JSON.stringify({
+          query: outgoing,
+          max_results: 5,
+          user_gender: userGender
+        })
       });
 
       if (!resp.ok) {
@@ -473,6 +478,15 @@ const PatientDashboard = () => {
             </div>
             <div className="ml-auto">
               <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUserGender(prev => prev === 'male' ? 'female' : 'male')}
+                  className={`border-primary/30 ${userGender === 'female' ? 'bg-pink-50 text-pink-700 border-pink-200' : 'text-medical-dark'}`}
+                >
+                  <User className={`w-4 h-4 mr-2 ${userGender === 'female' ? 'text-pink-500' : 'text-blue-500'}`} />
+                  {userGender === 'male' ? 'Male' : 'Female'}
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"

@@ -10,7 +10,7 @@ langchain-text-splitters==0.0.1
 langchain-weaviate>=0.0.1,<1.0.0
 langchain-huggingface==0.0.1
 weaviate-client>=4.5.0
-sentence-transformers==2.2.2
+# sentence-transformers==2.2.2 (Removed to avoid heavy torch/cuda dependency)
 
 # Document processing
 pypdf==3.17.4
@@ -41,3 +41,5 @@ openinference-instrumentation-openai>=0.1.14
 openinference-instrumentation-langchain>=0.1.14
 redis>=5.0.0
 fakeredis>=2.32.1
+prometheus-fastapi-instrumentator>=6.1.1
+prometheus_client>=0.20.0

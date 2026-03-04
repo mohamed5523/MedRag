@@ -1,0 +1,181 @@
+[
+    {
+        "id": 1,
+        "question": "متى يجوز للطبيب إفشاء سر المريض؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                21,
+                22
+            ]
+        },
+        "critical_excerpts": [
+            "اﻟﺴﺮﻳّﺔ اﺣﺘﺮام ﻋﺪم",
+            "أﻃﺮاف اﺷﻌﺎر",
+            "ﺧﻮﻓﺎ",
+            "ﻣﻀﺮّة",
+            "اﻟﻌﻘﻠﻴّﺔ اﻷﻣﺮاض",
+            "ﺑﺎﻟﺴﻴﺪا"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 2,
+        "question": "ما هي شروط الإجهاض الطبي؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                23
+            ]
+        },
+        "critical_excerpts": [
+            "اﻻﺟﻬﺎض",
+            "اﻟﻤﺸﻜﻮك ﻓﻰ ﺑﻘﺎءﻩ",
+            "ﺗﺸﻮّﻩ ﻟﺘﺮآﻴﺒﺔ"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 3,
+        "question": "ماذا يفعل الطبيب إذا اختلف أقارب المريض على طريقة العلاج وكان المريض قاصراً أو فاقداً للوعي؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                20
+            ]
+        },
+        "critical_excerpts": [
+            "وﺳﻴﻂ دور ﻳﻠﻌﺐ",
+            "اﻟﺨﻼف ﺗﻤﺎدى"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 4,
+        "question": "هل يحق للمريض استشارة طبيب آخر لنفس المرض؟ وكيف يتصرف الطبيب الأول؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                25
+            ]
+        },
+        "critical_excerpts": [
+            "ﺁﺧﺮ ﻃﺒﻴﺐ اﺳﺘﺸﺎرة",
+            "ﺗﺒﺬﻳﺮا ﻟﻠﻤﺮﻳﺾ"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 5,
+        "question": "من يتخذ القرار الطبي للمريض القاصر؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                24
+            ]
+        },
+        "critical_excerpts": [
+            "اﻟﻘﺎﺻﺮ اﻟﻤﺮﻳﺾ",
+            "اﻟﻤﺮﻳﺾ ﻣﺼﻠﺤﺔ",
+            "اﻟﻘﺮار ﺻﺎﺣﺐ ﻣﻤﺜّﻠﻪ"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 6,
+        "question": "ما هى واجبات الطبيب نحو المجتمع؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                25
+            ]
+        },
+        "critical_excerpts": [
+            "اﻟﻤﺠﺘﻤﻊ ﻧﺤﻮ واﺟﺒﺎﺗﻪ",
+            "اﻟﻌﺎﻟﻤﻴّﺔ اﻟﺼﺤّﺔ ﺗﻄﻮﻳﺮ"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 7,
+        "question": "ما هي المبادئ الثلاثة التي تشرف على القيمة الخاصة للسرية الطبية؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                21
+            ]
+        },
+        "critical_excerpts": [
+            "واﻟﺜﻘﺔ",
+            "اﻟﻐﻴﺮ واﺣﺘﺮام",
+            "اﻷﺳﺘﻘﻼﻟﻴّﺔ"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 8,
+        "question": "هل يجوز إفشاء السر المهني بعد وفاة المريض؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                21
+            ]
+        },
+        "critical_excerpts": [
+            "ﻣﻮﺗﻪ ﺑﻌﺪ ﺣﺘّﻰ اﻟﻤﺮﻳﺾ",
+            "اﻟﺴﺮّ ﺗﺠﺎوز ﻳﺠﻮزﻓﻴﻬﺎ"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 9,
+        "question": "كيف يتصرف الطبيب المعالج لمريض مصاب بالسيدا يرفض إخبار زوجه؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                22
+            ]
+        },
+        "critical_excerpts": [
+            "ﺑﺎﻟﺴﻴﺪا ﻣﺼﺎب",
+            "اﻟﺴﺮﻳّﺔ اﺣﺘﺮام ﻋﺪم",
+            "اﻟﺮﻓﻴﻖ أو اﻟﺰوج"
+        ],
+        "category": "medical_ethics"
+    },
+    {
+        "id": 10,
+        "question": "ما هو موقف الأخلاقيات الطبية من استعمال المضغات في البحث العلمي؟",
+        "ground_truth_sources": [
+            "ethics_manual_arabic.pdf"
+        ],
+        "expected_page_numbers": {
+            "ethics_manual_arabic.pdf": [
+                23
+            ]
+        },
+        "critical_excerpts": [
+            "اﻟﻌﻠﻤﻰ ﺑﺎﻟﺒﺤﺚ",
+            "ﻣﻀﻐﺎت اﺳﺘﻌﻤﺎل"
+        ],
+        "category": "medical_ethics"
+    }
+]

@@ -131,7 +131,7 @@ def test_query_with_voice_symptom_triage_forces_list_doctors(monkeypatch):
     monkeypatch.setattr(chat_api, "route_conversation", fake_route, raising=True)
 
     class FakeWorkflow:
-        async def run(self, *, decision, state, question, qa_engine, chat_history=None):
+        async def run(self, *, decision, state, question, qa_engine, chat_history=None, user_gender=None):
             class _Res:
                 qa_response = {
                     "answer": "دكاترة الباطنة: دكتور أ، دكتور ب",

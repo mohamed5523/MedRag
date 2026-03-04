@@ -38,3 +38,8 @@ __pycache__/
 *.pyzwzwzwz     
 data/
 deploy_venv/
+playground/
+**/__pycache__/
+
+# Windows Zone.Identifier metadata
+*:Zone.Identifier

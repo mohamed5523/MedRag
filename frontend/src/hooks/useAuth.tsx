@@ -50,7 +50,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       async (event, session) => {
         setSession(session);
         setUser(session?.user ?? null);
-        
+
         if (session?.user) {
           // Fetch user profile
           setTimeout(() => {
@@ -59,7 +59,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         } else {
           setProfile(null);
         }
-        
+
         setLoading(false);
       }
     );
@@ -68,7 +68,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
-      
+
       if (session?.user) {
         fetchUserProfile(session.user.id);
       } else {
@@ -102,7 +102,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
 
   const signUp = async (email: string, password: string, role: string = 'patient') => {
     const redirectUrl = `${window.location.origin}/`;
-    
+
     const { error } = await supabase.auth.signUp({
       email,
       password,

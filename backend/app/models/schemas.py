@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
     query: str
     max_results: Optional[int] = 5
     tts_provider: Optional[str] = None  # Optional override for /query-with-voice
+    user_gender: Optional[str] = "male"  # "male" or "female"
 
 class ChatResponse(BaseModel):
     answer: str

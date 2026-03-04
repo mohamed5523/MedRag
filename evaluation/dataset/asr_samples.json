@@ -1,0 +1,93 @@
+[
+  {
+    "id": 1,
+    "reference": "الدكتور أحمد محمد متاح يوم الأحد",
+    "audio_path": "asr_001.mp3",
+    "dialect": "msa",
+    "note": "Clear MSA — expected near-perfect transcription"
+  },
+  {
+    "id": 2,
+    "reference": "سعر الكشف مائتا جنيه",
+    "audio_path": "asr_002.mp3",
+    "dialect": "msa",
+    "note": "Short sentence — test digit/currency word recognition"
+  },
+  {
+    "id": 3,
+    "reference": "العيادة تفتح الساعة التاسعة صباحًا",
+    "audio_path": "asr_003.mp3",
+    "dialect": "msa",
+    "note": "Time expression — صباحًا must be preserved"
+  },
+  {
+    "id": 4,
+    "reference": "أعراض السكري تشمل العطش والتبول المتكرر",
+    "audio_path": "asr_004.mp3",
+    "dialect": "msa",
+    "note": "Medical vocabulary — key terms must be correctly transcribed"
+  },
+  {
+    "id": 5,
+    "reference": "يمكنك حجز موعد عبر الواتساب",
+    "audio_path": "asr_005.mp3",
+    "dialect": "msa",
+    "note": "Modern loanword — واتساب pronunciation varies"
+  },
+  {
+    "id": 6,
+    "reference": "مستشفى النيل الدولي يقدم خدمات طبية متكاملة",
+    "audio_path": "asr_006.mp3",
+    "dialect": "msa",
+    "note": "Proper noun (النيل الدولي) — entity recognition"
+  },
+  {
+    "id": 7,
+    "reference": "احجز موعد مع دكتور عظام",
+    "audio_path": "asr_007.mp3",
+    "dialect": "egyptian",
+    "note": "Short colloquial command"
+  },
+  {
+    "id": 8,
+    "reference": "مواعيد الدكتور من الساعة العاشرة حتى الثانية ظهرًا",
+    "audio_path": "asr_008.mp3",
+    "dialect": "msa",
+    "note": "Double time expression — ظهرًا diacritics normalised"
+  },
+  {
+    "id": 9,
+    "reference": "ج وجعني وعايز أروح جراح",
+    "audio_path": "asr_009.mp3",
+    "dialect": "egyptian",
+    "note": "Egyptian dialect — ج pronounced as hard g"
+  },
+  {
+    "id": 10,
+    "reference": "فين عيادة القلب",
+    "audio_path": "asr_010.mp3",
+    "dialect": "egyptian",
+    "note": "Egyptian: feen — location question"
+  },
+  {
+    "id": 11,
+    "reference": "امتى الدكتور بييجي",
+    "audio_path": "asr_011.mp3",
+    "dialect": "egyptian",
+    "note": "Egyptian: emta + biyeegy — hamza normalisation applies"
+  },
+  {
+    "id": 12,
+    "reference": "الدكتور مش موجود دلوقتي",
+    "audio_path": "asr_012.mp3",
+    "dialect": "egyptian",
+    "note": "Negation with مش + delwati time adverb"
+  },
+  {
+    "id": 13,
+    "reference": "عايز أعمل تحليل دم في أقرب فرع",
+    "audio_path": "asr_013.mp3",
+    "dialect": "egyptian",
+    "note": "Action intent + location qualifier"
+  }
+]

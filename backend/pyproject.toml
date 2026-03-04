@@ -48,6 +48,8 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.59b0",
     "redis>=7.0.1",
     "fakeredis>=2.32.1",
+    "prometheus-fastapi-instrumentator>=6.1.1",
+    "prometheus_client>=0.20.0",
 ]
 
 [tool.uv.workspace]
@@ -56,6 +58,7 @@ members = [
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 markers = [
     "integration: integration tests that require running services (e.g., MCP server)",
 ]
@@ -63,4 +66,5 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.23",
 ]

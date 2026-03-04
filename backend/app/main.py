@@ -106,11 +106,20 @@ app = FastAPI(
     title="MedRAG API",
     description="Medical RAG system backend with document processing and AI chat",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    servers=[
+        {"url": "https://dsb-kairo.de", "description": "Production (HTTPS)"},
+        {"url": "http://173.214.172.254:8000", "description": "Direct VPS IP"},
+        {"url": "http://localhost:8000", "description": "Local Development"},
+    ]
 )
 
 # Initialize observability (Phoenix via OTLP)
 init_observability(app)
+
+# Initialize Prometheus Instrumentator
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app)
 
 # Make instances available to routers
 # Option 1: Import directly from main (app.main.redis_client)
@@ -121,12 +130,12 @@ init_observability(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",  # React dev server
-        "http://localhost:3000",  # Alternative React dev port
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-        "http://localhost:8080",  # Vite dev server
-        "http://127.0.0.1:8080",
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://173.214.172.254:8080",
+        "https://dsb-kairo.de",
+        "*", # Useful for development testing on a VPS
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -147,6 +156,10 @@ app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"]
 app.include_router(asr.router, prefix="/api/asr", tags=["asr"])
 app.include_router(tts.router, prefix="/api/tts", tags=["tts"])
 app.include_router(whatsapp.router, tags=["whatsapp"])  # exposes /webhook/whatsapp
+
+# Evaluation dashboard API (Phase 5)
+from .api import evaluation as evaluation_api  # noqa: E402
+app.include_router(evaluation_api.router, prefix="/api/evaluation", tags=["evaluation"])
 
 
 @app.get("/")

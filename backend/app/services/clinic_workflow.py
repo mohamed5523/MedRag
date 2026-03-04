@@ -77,6 +77,7 @@ class ClinicWorkflowService:
         question: str,
         qa_engine: QAEngine,
         chat_history: Optional[List[Dict[str, str]]] = None,
+        user_gender: str = "male",
     ) -> ClinicWorkflowResult:
         if decision.mode != RouteMode.MCP:
             raise ValueError("ClinicWorkflowService can only execute MCP decisions.")
@@ -183,6 +184,7 @@ class ClinicWorkflowService:
                 contexts=docs,
                 time_context=time_context,
                 chat_history=chat_history,
+                user_gender=user_gender,
             )
 
             return ClinicWorkflowResult(
@@ -244,38 +246,110 @@ class ClinicWorkflowService:
                 reason="missing_clinic",
             )
 
-        # For availability queries, call the schedule tool for each day of the week
-        # and aggregate all returned slots into a single unified schedule view.
-        all_slots: List[ScheduleSlot] = []
+        # If no specific doctor was identified, fetch schedules for all doctors in the clinic
+        if not provider_id:
+            provider_list = await self._client.get_clinic_provider_list()
+            clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
+            
+            if not clinic_providers:
+                # Fallback: try filtering by name if ID filter failed
+                clinic_providers = _filter_provider_list(
+                    provider_list,
+                    clinic_name=state.entities.clinic,
+                    specialty=None,
+                ).providers
+                
+            if not clinic_providers:
+                 raise MCPWorkflowError(
+                    "ملقتش دكاترة للعيادة دي في النظام.",
+                    reason="provider_not_found",
+                )
 
-        # Create tasks for all days to run in parallel
-        tasks = [
-            self._client.get_clinic_provider_schedule(
-                clinic_id=clinic_id,
-                provider_id=provider_id,
-                day_id=day_id,
+            # Limit concurrency to avoid overwhelming the backend/MCP
+            sem = asyncio.Semaphore(10)
+            
+            async def fetch_schedule(p: ProviderRecord) -> Tuple[ProviderRecord, ProviderScheduleResponse]:
+                async with sem:
+                    now_dt = datetime.now()
+                    date_from_str = now_dt.strftime("%d/%m/%Y")
+                    date_to_str = (now_dt + timedelta(days=7)).strftime("%d/%m/%Y")
+                    # Fetch for next 7 days in a single API call
+                    resp = await self._client.get_clinic_provider_schedule(
+                        clinic_id=clinic_id,
+                        provider_id=p.provider_id,
+                        date_from=date_from_str,
+                        date_to=date_to_str,
+                    )
+                    
+                    return p, resp
+
+            results = await asyncio.gather(*(fetch_schedule(p) for p in clinic_providers))
+            
+            # Filter out providers with no slots
+            active_schedules = [(p, sched) for p, sched in results if sched.slots]
+            
+            if not active_schedules:
+                 raise MCPWorkflowError(
+                    "مفيش مواعيد متاحة لأي دكتور في العيادة دي دلوقتي.",
+                    reason="empty_schedule_response",
+                )
+                
+            clinic_name = state.entities.clinic or "العيادة"
+            if provider_entry and (provider_entry.clinic_name_ar or provider_entry.clinic_name_en):
+                 clinic_name = provider_entry.clinic_name_ar or provider_entry.clinic_name_en
+            
+            context_text = _format_multi_provider_schedule(clinic_name, active_schedules)
+            
+            doc = Document(
+                page_content=context_text,
+                metadata={"source": "mcp.clinic_schedule_all"},
             )
-            for day_id in range(1, 8)  # 1=Saturday .. 7=Friday (see DAY_NAME_TO_ID)
-        ]
-        
-        # Execute all requests concurrently
-        day_responses = await asyncio.gather(*tasks)
-
-        for day_id, day_response in enumerate(day_responses, start=1):
+            
+            # Audit the batch operation
             audit.append(
                 ToolAuditEntry(
-                    name="get_clinic_provider_schedule",
+                    name="get_clinic_schedule_all",
                     status="success",
                     details={
                         "clinic_id": clinic_id,
-                        "provider_id": provider_id,
-                        "day_id": day_id,
-                        "slots": len(day_response.slots),
+                        "providers_count": len(clinic_providers),
+                        "active_providers": len(active_schedules)
                     },
                 )
             )
-            if day_response.slots:
-                all_slots.extend(day_response.slots)
+            return [doc], audit
+
+        # For specific provider availability queries, call the schedule tool for a date range
+        # and aggregate all returned slots into a single unified schedule view.
+        all_slots: List[ScheduleSlot] = []
+
+        now_dt = datetime.now()
+        date_from_str = now_dt.strftime("%d/%m/%Y")
+        date_to_str = (now_dt + timedelta(days=7)).strftime("%d/%m/%Y")
+        
+        # Execute request
+        day_response = await self._client.get_clinic_provider_schedule(
+            clinic_id=clinic_id,
+            provider_id=provider_id,
+            date_from=date_from_str,
+            date_to=date_to_str,
+        )
+
+        audit.append(
+            ToolAuditEntry(
+                name="get_clinic_provider_schedule",
+                status="success",
+                details={
+                    "clinic_id": clinic_id,
+                    "provider_id": provider_id,
+                    "date_from": date_from_str,
+                    "date_to": date_to_str,
+                    "slots": len(day_response.slots),
+                },
+            )
+        )
+        if day_response.slots:
+            all_slots.extend(day_response.slots)
 
         if not all_slots:
             raise MCPWorkflowError(
@@ -373,10 +447,28 @@ class ClinicWorkflowService:
 
         async def fetch_for_provider(p: ProviderRecord) -> tuple[ProviderRecord, ProviderScheduleResponse]:
             async with sem:
+                # _infer_target_day_id now returns a specific date if we want a robust backend,
+                # but currently it returns `day_id`. If `day_id` is passed we map it to dateFrom/dateTo
+                # representing that date. For now, we will query for the next 7 days and let the formatter
+                # handle filtering by day_id, or we query just 1 day if we can infer the date.
+                # Assuming `day_id` is just a weekday (1..7). It's best to compute the target date:
+                target_dt = now_dt or datetime.now()
+                # Find the next date that matches the target day_id (1=Sat, ..., 7=Fri).
+                # Python weekday: 0=Mon, ..., 6=Sun.
+                # Map our 1..7 to Python: Sat=1->5, Sun=2->6, Mon=3->0, Tue=4->1, Wed=5->2, Thu=6->3, Fri=7->4
+                day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
+                if day_id and day_id in day_id_to_py_weekday:
+                    target_py_wd = day_id_to_py_weekday[day_id]
+                    days_ahead = (target_py_wd - target_dt.weekday()) % 7
+                    target_dt = target_dt + timedelta(days=days_ahead)
+                
+                target_date_str = target_dt.strftime("%d/%m/%Y")
+
                 resp = await self._client.get_clinic_provider_schedule(
                     clinic_id=clinic_id,
                     provider_id=p.provider_id,
-                    day_id=day_id,
+                    date_from=target_date_str,
+                    date_to=target_date_str,
                 )
                 audit.append(
                     ToolAuditEntry(
@@ -385,7 +477,8 @@ class ClinicWorkflowService:
                         details={
                             "clinic_id": clinic_id,
                             "provider_id": p.provider_id,
-                            "day_id": day_id,
+                            "date_from": target_date_str,
+                            "date_to": target_date_str,
                             "slots": len(resp.slots),
                         },
                     )
@@ -1238,3 +1331,36 @@ def _filter_provider_list(
         filtered.append(record)
     return ProviderListPayload(providers=filtered or provider_list.providers[:10])
 
+
+def _format_multi_provider_schedule(
+    clinic_name: str,
+    schedules: List[Tuple[ProviderRecord, ProviderScheduleResponse]],
+) -> str:
+    lines = [f"جبتلك مواعيد دكاترة {clinic_name} المتاحين من النظام."]
+    
+    def _normalize_ampm_for_ar(value: str) -> str:
+        """Prefer صباحًا/مساءً over ص/م or AM/PM."""
+        if not value: return value
+        out = value
+        out = re.sub(r"(?i)\bA\.?M\.?\b", "صباحًا", out)
+        out = re.sub(r"(?i)\bP\.?M\.?\b", "مساءً", out)
+        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*ص\b", r"\1 صباحًا", out)
+        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*م\b", r"\1 مساءً", out)
+        return out
+
+    for provider, response in schedules:
+        doctor_name = provider.provider_name_ar or provider.provider_name_en or "دكتور"
+        lines.append(f"\nدكتور: {doctor_name}")
+        
+        grouped: Dict[str, List[str]] = defaultdict(list)
+        for slot in response.slots:
+            day = slot.day_name or f"اليوم #{slot.day_id}"
+            start = _normalize_ampm_for_ar(slot.shift_start or "")
+            end = _normalize_ampm_for_ar(slot.shift_end or "")
+            if start and end:
+                grouped[day].append(f"{start} → {end}")
+        
+        for day, times in grouped.items():
+            lines.append(f"- {day}: " + "، ".join(times))
+            
+    return "\n".join(lines)

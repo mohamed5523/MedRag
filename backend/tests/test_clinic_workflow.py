@@ -27,7 +27,7 @@ class FakeQAEngine:
             "time_context_message": "stub",
         }
 
-    async def answer_question(self, *, question, contexts, time_context, chat_history=None):
+    async def answer_question(self, *, question, contexts, time_context, chat_history=None, user_gender=None):
         self.last_question = question
         self.last_contexts = contexts
         return {

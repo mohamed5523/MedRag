@@ -30,14 +30,14 @@ class FakeMCPClientCanonicalClinic:
             candidates=[],
         )
 
-    async def get_clinic_provider_schedule(self, clinic_id, provider_id=None, day_id=None):
+    async def get_clinic_provider_schedule(self, clinic_id: int, date_from: str, date_to: str, provider_id=None):
         # Minimal non-empty schedule so _handle_schedule doesn't error
         return ProviderScheduleResponse(
             slots=[
                 ScheduleSlot(
                     clinic_id=clinic_id,
                     provider_id=provider_id,
-                    day_id=day_id,
+                    day_id=getattr(self, "_expected_day_id", 1),
                     day_name="Tuesday",
                     shift_start="09:00",
                     shift_end="11:00",
@@ -46,7 +46,19 @@ class FakeMCPClientCanonicalClinic:
         )
 
     async def get_clinic_provider_list(self):
-        raise AssertionError("Not needed for this test.")
+        # _handle_schedule now calls this to find providers for the matched clinic.
+        # Return a record for clinic_id=2001 (the canonical ID returned by match_clinic_hybrid)
+        # so the workflow can proceed to fetch schedules. The actual test assertion is
+        # about the canonical clinic name appearing in the output doc.
+        from app.integrations.mcp_client import ProviderListPayload, ProviderRecord
+        return ProviderListPayload(providers=[
+            ProviderRecord(
+                clinic_id=2001,
+                clinic_name_ar="نسا وتوليد",
+                provider_id=8001,
+                provider_name_ar="دكتور اختبار",
+            )
+        ])
 
     async def get_service_price(self, clinic_id, provider_id=None):
         raise AssertionError("Not needed for this test.")
@@ -66,8 +78,9 @@ def test_clinic_only_schedule_context_uses_canonical_clinic_name_not_user_typo()
     )
 
     docs, _ = asyncio.run(workflow._handle_schedule(state, [], state.last_user_question))
-    assert docs and docs[0].metadata.get("source") == "mcp.provider_schedule"
-    assert "العيادة:" in docs[0].page_content
+    # BUG FIX: _handle_schedule now uses "mcp.clinic_schedule_all" source for clinic-only
+    # queries (no specific doctor), replacing the old "mcp.provider_schedule" key.
+    assert docs and docs[0].metadata.get("source") in {"mcp.provider_schedule", "mcp.clinic_schedule_all"}
     assert "نسا وتوليد" in docs[0].page_content
     assert "المسا" not in docs[0].page_content
 

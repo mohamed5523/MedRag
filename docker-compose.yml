@@ -4,6 +4,7 @@ services:
     container_name: weaviate
     ports:
       - "8081:8080" # Weaviate API (changed from 8080 to avoid conflict with frontend)
+      - "50051:50051" # Weaviate gRPC API
     env_file:
       - ./backend/.env
     volumes:
@@ -12,16 +13,7 @@ services:
       - medrag
     restart: unless-stopped
     healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "--spider",
-          "--quiet",
-          "--tries=1",
-          "--timeout=10",
-          "http://localhost:8080/v1/meta",
-        ]
+      test: [ "CMD", "wget", "--spider", "--quiet", "--tries=1", "--timeout=10", "http://localhost:8080/v1/meta" ]
       interval: 30s
       timeout: 15s
       retries: 5
@@ -54,7 +46,7 @@ services:
       mcp-server:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"] # test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1" ] # test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -69,13 +61,13 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8000
       - PYTHONUNBUFFERED=1
-    command: ["python", "clinic_server.py"]
+    command: [ "python", "clinic_server.py" ]
     ports:
       - "8020:8000"
     networks:
       - medrag
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/providers"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/providers" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -88,7 +80,7 @@ services:
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -126,13 +118,38 @@ services:
     networks:
       - medrag
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - medrag
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    networks:
+      - medrag
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
 networks:
   medrag:
     driver: bridge
 
 volumes:
   weaviate_data:
-# Optional: switch to named volumes by uncommenting and updating service volumes
-#volumes:
-#  chroma_data:
-#  uploads_data:
+    # Optional: switch to named volumes by uncommenting and updating service volumes
+    #volumes:
+    #  chroma_data:
+    #  uploads_data:

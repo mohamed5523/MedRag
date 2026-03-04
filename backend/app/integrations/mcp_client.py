@@ -537,23 +537,22 @@ class MCPClient:
     async def get_clinic_provider_schedule(
         self,
         clinic_id: int,
+        date_from: str,
+        date_to: str,
         provider_id: Optional[int] = None,
-        day_id: Optional[int] = None,
     ) -> ProviderScheduleResponse:
-        params = {"clinicid": clinic_id}
+        params = {"clinicid": clinic_id, "dateFrom": date_from, "dateTo": date_to}
         if provider_id:
-            params["providerid"] = provider_id
-        if day_id:
-            params["dayid"] = day_id
+            params["providerId"] = provider_id
 
         url = self._build_url(self.settings.provider_schedule_url, self.settings.provider_schedule_path)
         with tracer.start_as_current_span("mcp.get_clinic_provider_schedule") as span:
             span.set_attribute("mcp.url", url)
             span.set_attribute("mcp.params.clinicid", clinic_id)
+            span.set_attribute("mcp.params.dateFrom", date_from)
+            span.set_attribute("mcp.params.dateTo", date_to)
             if provider_id:
-                span.set_attribute("mcp.params.providerid", provider_id)
-            if day_id:
-                span.set_attribute("mcp.params.dayid", day_id)
+                span.set_attribute("mcp.params.providerId", provider_id)
             payload = await self._request_json(url, params=params, span=span)
             # Attach a preview of the raw MCP payload for observability in Phoenix
             try:
@@ -577,7 +576,7 @@ class MCPClient:
     ) -> ServicePriceResponse:
         params = {"clinicid": clinic_id}
         if provider_id:
-            params["providerid"] = provider_id
+            params["providerId"] = provider_id
 
 
         url = self._build_url(self.settings.service_price_url, self.settings.service_price_path)
@@ -585,7 +584,7 @@ class MCPClient:
             span.set_attribute("mcp.url", url)
             span.set_attribute("mcp.params.clinicid", clinic_id)
             if provider_id:
-                span.set_attribute("mcp.params.providerid", provider_id)
+                span.set_attribute("mcp.params.providerId", provider_id)
             payload = await self._request_json(url, params=params, span=span)
             # Attach a preview of the raw MCP payload for observability in Phoenix
             try:
@@ -786,8 +785,14 @@ class MCPClient:
         raise MCPClientError(f"MCP request failed after {attempts} attempts: {last_error}") from last_error
 
     def _build_url(self, override: Optional[str], path: str) -> str:
+        """Build a full URL from an optional full-URL override and a path.
+
+        If ``override`` is set it is returned as-is (allows env-var full URL overrides).
+        Otherwise the URL is assembled from ``settings.base_url`` (the internal MCP
+        aggregation server) and ``path``.
+        """
         if override:
-            return override
+            return str(override)
         base_url = str(self.settings.base_url).rstrip("/")
         return urljoin(f"{base_url}/", path.lstrip("/"))
 

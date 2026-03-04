@@ -175,10 +175,22 @@ async def _maybe_generate_audio(text: str) -> tuple[Optional[str], Optional[int]
     if not tts_service or not text:
         return None, None, False
 
+    # Import normalization
+    from ..core.tts_normalization import normalize_arabic_for_tts
+    
+    # Normalize Arabic text before sending to TTS
+    normalized_text = normalize_arabic_for_tts(text)
+    
+    # Log what text we're sending to TTS for debugging
+    logger.info(f"[TTS DEBUG] Original text (first 200 chars): {text[:200]}")
+    logger.info(f"[TTS DEBUG] Normalized text (first 200 chars): {normalized_text[:200]}")
+    logger.info(f"[TTS DEBUG] Full text length: {len(normalized_text)} chars")
+
     with tracer.start_as_current_span("synthesize_tts"):
         try:
-            audio_bytes = await tts_service.synthesize(text)
+            audio_bytes = await tts_service.synthesize(normalized_text)
             audio_data = base64.b64encode(audio_bytes).decode("utf-8")
+            logger.info(f"[TTS DEBUG] Successfully generated audio: {len(audio_bytes)} bytes")
             return audio_data, len(audio_bytes), True
         except Exception as exc:  # pragma: no cover - network/service failure
             logger.warning(f"TTS generation failed: {exc}")
@@ -338,18 +350,6 @@ async def query_documents(request: ChatRequest, x_session_id: Optional[str] = He
             
             if not relevant_docs:
                 root_span.set_attribute("response.no_documents", True)
-                response_text = (
-                    "I don't have any relevant information in my knowledge base to answer your question. Please try rephrasing your question or ensure that relevant documents have been uploaded."
-                )
-                # Save assistant response for continuity
-                short_term_memory.add_message(session_id, "assistant", response_text)
-                return ChatResponse(
-                    answer=response_text,
-                    sources=[],
-                    context_count=0,
-                    model_used=qa_engine.model,
-                    tokens_used=0
-                )
             
             # Generate answer using QA engine with time context and prior chat history
             answer_start = time.time()
@@ -370,6 +370,7 @@ async def query_documents(request: ChatRequest, x_session_id: Optional[str] = He
                     contexts=relevant_docs,
                     time_context=time_context,
                     chat_history=history_payload,
+                    user_gender=request.user_gender or "male",
                 )
 
                 answer_time = time.time() - answer_start
@@ -714,6 +715,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                         question=state_input_query,
                         qa_engine=qa_engine,
                         chat_history=history_payload,
+                        user_gender=request.user_gender or "male",
                     )
                 except (MCPWorkflowError, MCPClientError) as workflow_error:
                     fallback_reason = getattr(workflow_error, "reason", "mcp_client_error")
@@ -884,32 +886,6 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
 
             if not relevant_docs:
                 root_span.set_attribute("response.no_documents", True)
-                response_text = (
-                    "I don't have any relevant information in my knowledge base to answer your question. "
-                    "Please try rephrasing your question or ensure that relevant documents have been uploaded."
-                )
-
-                short_term_memory.add_message(session_id, "assistant", response_text)
-
-                audio_data, audio_size, has_audio = await _maybe_generate_audio(response_text)
-
-                processing_time = time.time() - start_time
-                root_span.set_attribute("total.duration_ms", processing_time * 1000)
-                root_span.add_event("request.completed", {
-                    "duration_ms": processing_time * 1000,
-                    "timestamp": datetime.now().isoformat()
-                })
-
-                return ChatResponseWithAudio(
-                    answer=response_text,
-                    sources=[],
-                    context_count=0,
-                    model_used=qa_engine.model,
-                    tokens_used=0,
-                    audio_data=audio_data,
-                    audio_size=audio_size,
-                    has_audio=has_audio,
-                )
 
             # Generate answer with QA engine
             answer_start = time.time()
@@ -924,6 +900,7 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                     contexts=relevant_docs,
                     time_context=time_context,
                     chat_history=history_payload,
+                    user_gender=request.user_gender or "male",
                 )
 
                 answer_time = time.time() - answer_start

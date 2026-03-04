@@ -105,11 +105,31 @@ class TextToSpeech:
                 if selected_provider == "elevenlabs":
                     selected_voice_id = voice_id or (tts_settings.ELEVENLABS_VOICE_ID or "")
                     span.set_attribute("voice", selected_voice_id)
-                    logger.info(f"[ElevenLabs] Synthesizing with voice: {selected_voice_id}")
+                    span.set_attribute("model", tts_settings.ELEVENLABS_MODEL)
+
+                    # Normalize text (MSA -> Egyptian dialect) before synthesis
+                    from .tts_normalization import normalize_arabic_for_tts
+                    normalized_text = normalize_arabic_for_tts(text)
+                    logger.info(f"[ElevenLabs] Normalized text: {normalized_text}")
+
+                    logger.info(
+                        f"[ElevenLabs] Synthesizing with voice: {selected_voice_id}, "
+                        f"model: {tts_settings.ELEVENLABS_MODEL}, "
+                        f"stability: {tts_settings.ELEVENLABS_STABILITY}, "
+                        f"similarity: {tts_settings.ELEVENLABS_SIMILARITY_BOOST}, "
+                        f"style: {tts_settings.ELEVENLABS_STYLE}"
+                    )
                     audio_generator = self.client.text_to_speech.convert(
-                        text=text,
+                        text=normalized_text,
                         voice_id=selected_voice_id,
                         model_id=tts_settings.ELEVENLABS_MODEL,
+                        output_format=tts_settings.ELEVENLABS_OUTPUT_FORMAT,
+                        voice_settings={
+                            "stability": tts_settings.ELEVENLABS_STABILITY,
+                            "similarity_boost": tts_settings.ELEVENLABS_SIMILARITY_BOOST,
+                            "style": tts_settings.ELEVENLABS_STYLE,
+                            "use_speaker_boost": True,
+                        },
                     )
                     audio_bytes = b"".join(audio_generator)
                     if not audio_bytes:
@@ -143,7 +163,11 @@ class TextToSpeech:
             raise TextToSpeechError("azure-cognitiveservices-speech is not installed")
 
         def _do_speak() -> bytes:
-            speech_config = speechsdk.SpeechConfig(subscription=tts_settings.AZURE_TTS_API_KEY, endpoint=tts_settings.AZURE_TTS_ENDPOINT)
+            # Azure Speech SDK requires region, not endpoint
+            speech_config = speechsdk.SpeechConfig(
+                subscription=tts_settings.AZURE_TTS_API_KEY,
+                region=tts_settings.AZURE_TTS_REGION
+            )
             speech_config.speech_synthesis_voice_name = voice_name
             fmt_enum = self._azure_output_format_enum(tts_settings.AZURE_TTS_OUTPUT_FORMAT)
             if fmt_enum:
@@ -157,31 +181,26 @@ class TextToSpeech:
                 audio = result.audio_data or b""
                 return bytes(audio)
             if result.reason == speechsdk.ResultReason.Canceled:
-                details = speechsdk.CancellationDetails.from_result(result)
-                raise TextToSpeechError(f"Azure TTS canceled: {details.reason} | {details.error_details or ''}")
+                # Handle cancellation - get details from result properties
+                error_details = getattr(result, 'error_details', 'Unknown error')
+                cancellation_reason = getattr(result, 'cancellation_details', None)
+                if cancellation_reason:
+                    error_msg = f"Azure TTS canceled: {cancellation_reason.reason} | {cancellation_reason.error_details or ''}"
+                else:
+                    error_msg = f"Azure TTS canceled: {error_details}"
+                raise TextToSpeechError(error_msg)
             raise TextToSpeechError(f"Azure TTS failed: reason={result.reason}")
 
         return await asyncio.to_thread(_do_speak)
 
     async def _openai_synthesize(self, text: str, voice_name: str) -> bytes:
         """Call OpenAI TTS (gpt-4o-mini-tts) using the official Python SDK."""
+        # Normalize text first (MSA -> Egyptian)
+        from .tts_normalization import normalize_arabic_for_tts
+        normalized_text = normalize_arabic_for_tts(text)
+        logger.info(f"[OpenAI TTS] Normalized text: {normalized_text}")
+
         instructions = (
-            # "You are a helpful assistant that speaks in Egyptian Arabic dialect (Masri). "
-            # "Speak in Egyptian Arabic dialect (Masri) using natural colloquial grammar and vocabulary, "
-            # "not Modern Standard Arabic, Saudi Arabic, or any other dialect. "
-            # "Use polite, professional Egyptian Arabic suitable for a helpful assistant "
-            # "(friendly and respectful, not slang-heavy). "
-            # "If a word is in another language, pronounce it naturally as a fluent Egyptian speaker would. "
-            # "Speak in a warm, empathetic, and supportive tone with natural emotional variation. "
-            # "Use gentle, expressive intonation, with a slight rise at the end of questions to sound engaged and attentive. "
-            # "Maintain a calm, friendly speaking pace — clear and unhurried. "
-            # "When offering reassurance or sensitive information, soften your delivery and slow slightly "
-            # "to convey care, trust, and emotional presence. "
-            # "Always sound approachable, confident, and genuinely eager to help.\n"
-            # "Years: Read years as natural numbers (e.g., 2024 is 'alfayn arba'a we 'ishreen', not formal MSA). "
-            # "Dates: Use Egyptian month names (e.g., Yanayer, Febrayer, Marays, April, Mayo, Yunyu, Yulyu, Aghostos, September, October, November, December). Read dates simply (e.g., 'واحد مايو' as 'wahed mayo'). "
-            # "Times: Use the 12-hour clock with colloquial markers. Use 'we rob'' (and a quarter), 'we telt' (and a third/twenty past), 'noss' (half past), and 'illa' (to/minus). Add 'es-sobh' (morning) or 'be-leil' (night) instead of AM/PM. "
-            # "Numbers: Use Egyptian pronunciations (e.g., 'Etneen' not 'Ithnayn', 'Talata' not 'Thalatha', 'Tamanya' not 'Thamaniya')"
             "You are a helpful assistant that speaks in Urban Egyptian Arabic dialect (Masri). Use natural colloquial grammar and vocabulary, "
             "avoiding Modern Standard Arabic or other regional dialects. Use polite, professional Masri (friendly and respectful, not slang-heavy) with a warm, empathetic tone. "
             "Specifically, pronounce 'Jeem' as a hard 'G' (as in 'goat') and 'Qaf' as a glottal stop (Hamza), except in established formal names. "
@@ -198,9 +217,10 @@ class TextToSpeech:
             response = await self.openai_client.audio.speech.create(
                 model=tts_settings.OPENAI_TTS_MODEL,  # e.g. "gpt-4o-mini-tts" or "tts-1"
                 voice=voice_name or tts_settings.OPENAI_TTS_VOICE,
-                input=text,
+                input=normalized_text,
                 response_format=tts_settings.OPENAI_TTS_AUDIO_FORMAT,  # e.g. "mp3" or "wav"
-                instructions=instructions,
+                # instructions=instructions, # OpenAI TTS API doesn't support system instructions yet, prompt via input is needed if model supports it, but currently standard TTS models take 'input' as text to read.
+                # However, normalization helps significantly.
             )
             audio_bytes = await response.aread()
             return audio_bytes

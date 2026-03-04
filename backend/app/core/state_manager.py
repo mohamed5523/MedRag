@@ -36,7 +36,7 @@ class ConversationState(BaseModel):
 # ------------------------------------------------------------------------------
 
 class StateManager:
-    def __init__(self, model: str = "gpt-4o-mini"):
+    def __init__(self, model: str = "gpt-4o"):
         self.api_key = os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             logger.warning("OPENAI_API_KEY not found.")
@@ -72,23 +72,38 @@ JSON Schema:
 
 ### IMPORTANT RULES ###
 
-1. **Entity Merging**
+1. **Entity Merging (same topic)**
    - If the user does NOT explicitly mention a new doctor/clinic/hospital,
-     you MUST keep the old one from previous_state.
-   - Example: User says "سعر كشفه كام؟" -> doctor remains the one in previous_state.
-   - Do NOT overwrite entities with null unless user explicitly resets context.
+     AND the intent category stays the same, keep the old entities.
+   - Example: User says "سعر كشفه كام؟" after asking about a specific doctor
+     → doctor remains from previous_state.
 
-2. **Symptoms**
+2. **Topic Change Detection (CRITICAL)**
+   - If the user's new question is about a DIFFERENT entity (different doctor,
+     different clinic, or different topic entirely), you MUST CLEAR entities
+     that belong to the OLD topic.
+   - Signals of a topic change:
+     a) User mentions a NEW doctor name → clear old clinic + clinic_id
+     b) User mentions a NEW clinic name → clear old doctor + provider_id
+     c) User asks a completely unrelated question (e.g., switching from
+        doctor schedule to hospital general info) → clear ALL old entities
+     d) User asks a generic question without any entity reference
+        (e.g., "مين الدكاترة الموجودين؟") → clear old doctor + provider_id
+   - Do NOT keep stale entities from a previous topic.
+   - Example: Previous was "مواعيد دكتور أحمد", new is "سعر كشف عيادة الأسنان"
+     → clear doctor="أحمد", keep only clinic="الأسنان"
+
+3. **Symptoms**
    - Append new symptoms to existing ones.
    - Do not remove symptoms unless user states they made a mistake.
 
-3. **Target Entity Type Classification**
+4. **Target Entity Type Classification**
    - If text mentions: "دكتور", person name → target = "doctor"
    - If mentions: "عيادة" → target = "clinic"
    - If mentions: "مستشفى" → target = "hospital"
    - If ambiguous → inherit previous target entity type.
 
-4. **Intent Detection Examples**
+5. **Intent Detection Examples**
    - "سعر الكشف", "سعره", "بكام", "التكلفة", "كم السعر" → ask_price
    - "احجز", "ميعاد", "حجز", "موعد", "أحجز" → book_appointment
    - "مين الدكاترة", "أسماء الأطباء", "قائمة", "دكاترة ايه الموجودين" → list_doctors
@@ -97,15 +112,15 @@ JSON Schema:
    - أي سؤال عن مستشفى أو خدماتها العامة → hospital_info
    - Follow natural language meaning.
 
-5. **Clinic vs Hospital Distinction**
+6. **Clinic vs Hospital Distinction**
    - "عيادة" (clinic) + schedules/doctors → target = "clinic" (use MCP tools)
    - "مستشفى" (hospital) + general info → target = "hospital" (use RAG)
    - Surgery clinic, dental clinic, etc. are CLINICs not hospitals
 
-6. **Ambiguity**
+7. **Ambiguity**
    - If the request lacks essential details → needs_followup = true.
 
-7. **NEVER hallucinate new entities**
+8. **NEVER hallucinate new entities**
    - ONLY use entities found in history, previous_state, or current query.
 
 ----------------

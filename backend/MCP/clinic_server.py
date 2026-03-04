@@ -153,9 +153,9 @@ async def get_clinic_provider_list() -> str:
 @mcp.tool()
 async def get_clinic_provider_schedule(
     clinicid: int,
-    dayid: Optional[int] = None,
-    providerid: Optional[int] = None,
-    day_name: Optional[str] = None
+    dateFrom: str,
+    dateTo: str,
+    providerid: Optional[int] = None
 ) -> str:
     """Get clinic provider schedule information.
     
@@ -164,23 +164,25 @@ async def get_clinic_provider_schedule(
     
     Parameters:
         clinicid (int, required): The Clinic ID you need to retrieve data for
-        dayid (int, optional): Day ID from 1-7 (1=Saturday, 2=Sunday, 3=Monday, 4=Tuesday, 5=Wednesday, 6=Thursday, 7=Friday)
+        dateFrom (str, required): The start date for the schedule query (YYYY-MM-DD or similar supported format)
+        dateTo (str, required): The end date for the schedule query (YYYY-MM-DD or similar supported format)
         providerid (int, optional): Specific provider doctor ID to filter results
-        day_name (str, optional): Day name (e.g., 'Monday', 'Saturday') - will be converted to dayid
     
     Returns:
         JSON response containing provider schedule information including shift times
     """
-    if day_name and not dayid:
-        dayid = DAY_NAME_TO_ID.get(day_name.lower())
-    
+    if not dateFrom:
+        raise ValueError("dateFrom is required")
+    if not dateTo:
+        raise ValueError("dateTo is required")
+        
     # Build request parameters
     params = {}
     params["clinicid"] = clinicid
-    if dayid is not None:
-        params["dayid"] = dayid
+    params["dateFrom"] = dateFrom
+    params["dateTo"] = dateTo
     if providerid is not None:
-        params["providerid"] = providerid
+        params["providerId"] = providerid
     
     return await fetch_text(
         settings.provider_schedule_url,
@@ -205,11 +207,13 @@ async def get_service_price(
     Returns:
         JSON response containing service names, prices, doctor information, and clinic details
     """
+    if not clinicid:
+        raise ValueError("Clinicid is required")
+        
     # Build request parameters
     params = {}
     params["clinicid"] = clinicid
     if providerid is not None:
-        # params["providerid"] = providerid
         params["providerId"] = providerid 
         
     
@@ -937,24 +941,30 @@ async def providers_schedule_route(request: Request) -> Response:
     except (ValueError, TypeError):
         return JSONResponse({"error": "clinicid query parameter is required and must be an integer"}, status_code=400)
 
-    day_id_param = params.get("dayid")
-    provider_id_param = params.get("providerid")
+    # Accept dateFrom / dateTo (sent by the backend mcp_client) as well as the
+    # legacy dayid param so we do not break any existing callers.
+    date_from = params.get("dateFrom") or params.get("datefrom") or params.get("date_from")
+    date_to = params.get("dateTo") or params.get("dateto") or params.get("date_to")
 
-    try:
-        day_id = int(day_id_param) if day_id_param is not None else None
-    except ValueError:
-        return JSONResponse({"error": "dayid must be an integer"}, status_code=400)
+    # Require dateFrom+dateTo for the real-API call; fall back to "today" if absent.
+    from datetime import datetime, timedelta as _td
+    _now = datetime.now()
+    if not date_from:
+        date_from = _now.strftime("%d/%m/%Y")
+    if not date_to:
+        date_to = (_now + _td(days=7)).strftime("%d/%m/%Y")
 
+    provider_id_param = params.get("providerId") or params.get("providerid") or params.get("provider_id")
     try:
         provider_id = int(provider_id_param) if provider_id_param is not None else None
     except ValueError:
-        return JSONResponse({"error": "providerid must be an integer"}, status_code=400)
+        return JSONResponse({"error": "providerId must be an integer"}, status_code=400)
 
     data = await get_clinic_provider_schedule(
         clinicid=clinic_id,
-        dayid=day_id,
+        dateFrom=date_from,
+        dateTo=date_to,
         providerid=provider_id,
-        day_name=params.get("day_name"),
     )
     return _json_response_from_text(data)
 

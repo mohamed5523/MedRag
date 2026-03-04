@@ -14,7 +14,7 @@ class FakeQAEngine:
     def build_time_context(self, question, now_dt=None):
         return {"is_arabic": True, "tz_name": "Africa/Cairo", "date_hint": "اليوم", "time_context_message": "stub"}
 
-    async def answer_question(self, *, question, contexts, time_context, chat_history=None):
+    async def answer_question(self, *, question, contexts, time_context, chat_history=None, user_gender=None):
         return {"answer": "ok", "sources": [], "context_count": len(contexts), "model_used": self.model, "tokens_used": 0}
 
 

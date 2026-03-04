@@ -14,7 +14,7 @@ class FakeQAEngine:
     def build_time_context(self, question, now_dt=None):
         return {"is_arabic": True, "tz_name": "Africa/Cairo", "date_hint": "اليوم", "time_context_message": "stub"}
 
-    async def answer_question(self, *, question, contexts, time_context, chat_history=None):
+    async def answer_question(self, *, question, contexts, time_context, chat_history=None, user_gender=None):
         return {"answer": "ok", "sources": [], "context_count": len(contexts), "model_used": self.model, "tokens_used": 0}
 
 
@@ -30,7 +30,7 @@ class FakeMCPClientNoDoctorInference:
         self.match_doctor_calls += 1
         raise AssertionError("match_doctor_hybrid must NOT be called for clinic-only query 'مواعيد جراحه'")
 
-    async def get_clinic_provider_schedule(self, clinic_id, provider_id=None, day_id=None):
+    async def get_clinic_provider_schedule(self, clinic_id: int, date_from: str, date_to: str, provider_id=None):
         self.schedule_calls += 1
         # Return at least one slot so workflow doesn't fail with empty schedule
         return ProviderScheduleResponse(
@@ -38,13 +38,27 @@ class FakeMCPClientNoDoctorInference:
                 ScheduleSlot(
                     clinic_id=clinic_id,
                     provider_id=None,
-                    day_id=day_id,
+                    day_id=getattr(self, "_expected_day_id", 1),
                     day_name="Saturday",
                     shift_start="09:00",
                     shift_end="10:00",
                 )
             ]
         )
+
+    async def get_clinic_provider_list(self):
+        # Return a provider for clinic_id=1097 so _handle_schedule can proceed
+        # past the empty-list guard. The real assertion is that match_doctor_hybrid
+        # is NOT called for a clinic-only query like "مواعيد جراحه".
+        from app.integrations.mcp_client import ProviderListPayload, ProviderRecord
+        return ProviderListPayload(providers=[
+            ProviderRecord(
+                clinic_id=1097,
+                clinic_name_ar="جراحه",
+                provider_id=9001,
+                provider_name_ar="دكتور اختبار",
+            )
+        ])
 
 
 def _decision(intent="check_availability"):

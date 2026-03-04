@@ -1,0 +1,14 @@
+[
+  {"id": 1, "text": "العيادة تفتح الساعة التاسعة صباحًا وتغلق الساعة الخامسة مساءً", "language": "ar", "expected_min_bytes": 100},
+  {"id": 2, "text": "دكتور أحمد محمد متاح يوم الأحد والثلاثاء من الساعة العاشرة صباحًا", "language": "ar", "expected_min_bytes": 100},
+  {"id": 3, "text": "سعر الكشف مائتا جنيه مصري فقط", "language": "ar", "expected_min_bytes": 80},
+  {"id": 4, "text": "يمكنك حجز موعد عبر الواتساب أو الهاتف", "language": "ar", "expected_min_bytes": 90},
+  {"id": 5, "text": "أعراض السكري تشمل العطش الشديد والتبول المتكرر والتعب", "language": "ar", "expected_min_bytes": 100},
+  {"id": 6, "text": "مستشفى النيل الدولي يقدم خدمات متكاملة في جميع التخصصات", "language": "ar", "expected_min_bytes": 100},
+  {"id": 7, "text": "يُرجى التواصل معنا على الرقم المخصص لحجوزات عيادة القلب", "language": "ar", "expected_min_bytes": 100},
+  {"id": 8, "text": "The clinic is open Monday through Friday from nine AM to five PM", "language": "en", "expected_min_bytes": 80},
+  {"id": 9, "text": "Please bring your insurance card and a valid photo ID to your appointment", "language": "en", "expected_min_bytes": 80},
+  {"id": 10, "text": "Your appointment has been confirmed for Tuesday at eleven thirty in the morning", "language": "en", "expected_min_bytes": 80},
+  {"id": 11, "text": "عيادة الأطفال متخصصة في رعاية الأطفال من الولادة حتى سن الثامنة عشرة", "language": "ar", "expected_min_bytes": 100},
+  {"id": 12, "text": "التحاليل المطلوبة قبل الكشف تشمل صورة الدم الكاملة والسكر والكوليسترول", "language": "ar", "expected_min_bytes": 100}
+]

@@ -1,0 +1,1677 @@
+{
+  "run_at": "2026-03-04T04:59:34.719026+00:00",
+  "mode": "real",
+  "provider": "",
+  "composite_score": 0.509,
+  "composite_passed": false,
+  "pass_threshold": 0.85,
+  "all_passed": false,
+  "thresholds": {
+    "tts": {
+      "passed": true,
+      "threshold_key": "tts_latency_p95_ms",
+      "threshold_value": 3000,
+      "score": 0.154
+    },
+    "asr": {
+      "passed": false,
+      "threshold_key": "asr_wer_max",
+      "threshold_value": 0.3,
+      "score": 0.563
+    },
+    "llm": {
+      "passed": true,
+      "threshold_key": "llm_judge_score_min",
+      "threshold_value": 0.7,
+      "score": 0.736
+    },
+    "mcp": {
+      "passed": false,
+      "threshold_key": "mcp_intent_accuracy_min",
+      "threshold_value": 0.8,
+      "score": 0.713
+    },
+    "rag": {
+      "passed": false,
+      "threshold_key": "rag_precision_min",
+      "threshold_value": 0.6,
+      "score": 0.0
+    }
+  },
+  "results": [
+    {
+      "component": "tts",
+      "score": 0.154,
+      "success_rate": 0.167,
+      "avg_rtf": 69.605,
+      "avg_bytes_per_char": 0.0,
+      "latency": {
+        "p50": 151.2154170013673,
+        "p95": 1720.2456979994167,
+        "p99": 1720.2456979994167,
+        "mean": 760.414648249783,
+        "count": 12
+      },
+      "sample_count": 12,
+      "details": [
+        {
+          "text_preview": "العيادة تفتح الساعة التاسعة صباحًا وتغلق الساعة الخامسة مساء",
+          "latency_ms": 2602.8,
+          "rtf": 5.859,
+          "bytes_per_char": 0.0,
+          "success": true,
+          "error": null
+        },
+        {
+          "text_preview": "دكتور أحمد محمد متاح يوم الأحد والثلاثاء من الساعة العاشرة ص",
+          "latency_ms": 1720.2,
+          "rtf": 9.446,
+          "bytes_per_char": 0.0,
+          "success": true,
+          "error": null
+        },
+        {
+          "text_preview": "سعر الكشف مائتا جنيه مصري فقط",
+          "latency_ms": 1243.1,
+          "rtf": 5.832,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "يمكنك حجز موعد عبر الواتساب أو الهاتف",
+          "latency_ms": 1259.4,
+          "rtf": 7.345,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "أعراض السكري تشمل العطش الشديد والتبول المتكرر والتعب",
+          "latency_ms": 1278.2,
+          "rtf": 10.366,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "مستشفى النيل الدولي يقدم خدمات متكاملة في جميع التخصصات",
+          "latency_ms": 135.5,
+          "rtf": 101.496,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "يُرجى التواصل معنا على الرقم المخصص لحجوزات عيادة القلب",
+          "latency_ms": 139.4,
+          "rtf": 98.645,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "The clinic is open Monday through Friday from nine AM to fiv",
+          "latency_ms": 163.9,
+          "rtf": 97.633,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "Please bring your insurance card and a valid photo ID to you",
+          "latency_ms": 147.5,
+          "rtf": 123.704,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "Your appointment has been confirmed for Tuesday at eleven th",
+          "latency_ms": 142.0,
+          "rtf": 139.051,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "عيادة الأطفال متخصصة في رعاية الأطفال من الولادة حتى سن الثا",
+          "latency_ms": 151.2,
+          "rtf": 112.422,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        },
+        {
+          "text_preview": "التحاليل المطلوبة قبل الكشف تشمل صورة الدم الكاملة والسكر وا",
+          "latency_ms": 141.7,
+          "rtf": 123.466,
+          "bytes_per_char": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/tts/synthesize"
+        }
+      ],
+      "duration_s": 9.13
+    },
+    {
+      "component": "asr",
+      "score": 0.563,
+      "avg_wer": 0.4474,
+      "avg_cer": 0.4265,
+      "avg_rouge_l": 0.5594,
+      "latency": {
+        "p50": 982.8932679993159,
+        "p95": 1423.4815109994088,
+        "p99": 1423.4815109994088,
+        "mean": 1023.9293481534752,
+        "count": 13
+      },
+      "sample_count": 13,
+      "skipped": 0,
+      "details": [
+        {
+          "id": 1,
+          "dialect": "msa",
+          "audio_path": "asr_001.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "الدكتور أحمد محمد متاح يوم الأحد",
+          "hypothesis": "دكتور احمد محمد متاح يوم الاحد.",
+          "wer": 0.1667,
+          "cer": 0.0938,
+          "rouge_l": 0.8333,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 2,
+          "dialect": "msa",
+          "audio_path": "asr_002.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "سعر الكشف مائتا جنيه",
+          "hypothesis": "سعر الكشف مائتان جنيه.",
+          "wer": 0.25,
+          "cer": 0.1,
+          "rouge_l": 0.75,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 3,
+          "dialect": "msa",
+          "audio_path": "asr_003.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "العيادة تفتح الساعة التاسعة صباحًا",
+          "hypothesis": "العيادة تفتح الساعة تاسعة صباحا.",
+          "wer": 0.2,
+          "cer": 0.0909,
+          "rouge_l": 0.8,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 4,
+          "dialect": "msa",
+          "audio_path": "asr_004.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "أعراض السكري تشمل العطش والتبول المتكرر",
+          "hypothesis": "أعراض السكري تشمل العطش والتبول المتكرر.",
+          "wer": 0.0,
+          "cer": 0.0256,
+          "rouge_l": 1.0,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 5,
+          "dialect": "msa",
+          "audio_path": "asr_005.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "يمكنك حجز موعد عبر الواتساب",
+          "hypothesis": "يمكنك حجز موعد عبر الواتساب.",
+          "wer": 0.0,
+          "cer": 0.037,
+          "rouge_l": 1.0,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 6,
+          "dialect": "msa",
+          "audio_path": "asr_006.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "مستشفى النيل الدولي يقدم خدمات طبية متكاملة",
+          "hypothesis": "مستشفى النيل الدولي يقدم خدمات طبية متكاملة.",
+          "wer": 0.0,
+          "cer": 0.0233,
+          "rouge_l": 1.0,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 7,
+          "dialect": "egyptian",
+          "audio_path": "asr_007.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "احجز موعد مع دكتور عظام",
+          "hypothesis": "احجز موعد مع دكتور عظام.",
+          "wer": 0.0,
+          "cer": 0.0435,
+          "rouge_l": 1.0,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 8,
+          "dialect": "msa",
+          "audio_path": "asr_008.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "مواعيد الدكتور من الساعة العاشرة حتى الثانية ظهرًا",
+          "hypothesis": "",
+          "wer": 1.0,
+          "cer": 1.0,
+          "rouge_l": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/asr/transcribe"
+        },
+        {
+          "id": 9,
+          "dialect": "egyptian",
+          "audio_path": "asr_009.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "ج وجعني وعايز أروح جراح",
+          "hypothesis": "وجعني وعايز أروح جراح.",
+          "wer": 0.2,
+          "cer": 0.1304,
+          "rouge_l": 0.8889,
+          "success": true,
+          "error": null
+        },
+        {
+          "id": 10,
+          "dialect": "egyptian",
+          "audio_path": "asr_010.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "فين عيادة القلب",
+          "hypothesis": "",
+          "wer": 1.0,
+          "cer": 1.0,
+          "rouge_l": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/asr/transcribe"
+        },
+        {
+          "id": 11,
+          "dialect": "egyptian",
+          "audio_path": "asr_011.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "امتى الدكتور بييجي",
+          "hypothesis": "",
+          "wer": 1.0,
+          "cer": 1.0,
+          "rouge_l": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/asr/transcribe"
+        },
+        {
+          "id": 12,
+          "dialect": "egyptian",
+          "audio_path": "asr_012.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "الدكتور مش موجود دلوقتي",
+          "hypothesis": "",
+          "wer": 1.0,
+          "cer": 1.0,
+          "rouge_l": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/asr/transcribe"
+        },
+        {
+          "id": 13,
+          "dialect": "egyptian",
+          "audio_path": "asr_013.mp3",
+          "audio_mime": "audio/mpeg",
+          "reference": "عايز أعمل تحليل دم في أقرب فرع",
+          "hypothesis": "",
+          "wer": 1.0,
+          "cer": 1.0,
+          "rouge_l": 0.0,
+          "success": false,
+          "error": "HTTP 500 ← /api/asr/transcribe"
+        }
+      ],
+      "duration_s": 13.37
+    },
+    {
+      "component": "llm",
+      "score": 0.736,
+      "avg_judge_score": 0.859,
+      "avg_keyword_rate": 0.519,
+      "avg_ammya_score": 0.559,
+      "avg_punct_score": 1.0,
+      "per_category": {
+        "emergency": 0.696,
+        "pediatrics": 0.549,
+        "cardiology": 0.852,
+        "lab": 0.647,
+        "pharmacology": 0.803,
+        "nutrition": 0.839
+      },
+      "latency": {
+        "p50": 6548.9183950012375,
+        "p95": 6721.028025000123,
+        "p99": 6721.028025000123,
+        "mean": 6061.479239875325,
+        "count": 8
+      },
+      "sample_count": 8,
+      "details": [
+        {
+          "question": "أعمل إيه لو ابني سخن بالليل جداً؟",
+          "category": "emergency",
+          "difficulty": "medium",
+          "actual_preview": "وعليكم السلام ورحمة الله، أهلا بيك، أنا كيمت المساعدة الطبية بتاعتك. لو ابنك سخن بالليل، أول حاجة لازم تتأكد إن درجة حرا",
+          "judge_scores": {
+            "factual": 5.0,
+            "relevance": 5.0,
+            "completeness": 4.0,
+            "reasoning": "The answer is medically accurate and relevant, but it misses mentioning the use of lukewarm compresses."
+          },
+          "keyword_rate": 0.5,
+          "ammya_score": 0.728,
+          "punctuation_score": 1.0,
+          "judge_norm": 0.95,
+          "final_score": 0.807,
+          "latency_ms": 6721.0
+        },
+        {
+          "question": "إيه أحسن حاجة لمغص الأطفال الرضع؟",
+          "category": "pediatrics",
+          "difficulty": "medium",
+          "actual_preview": "حضرتك محتاج تروح عيادة الأطفال، عشان مغص الأطفال الرضع ممكن يكون له أسباب مختلفة، والأحسن إن دكتور الأطفال يشوف الطفل وي",
+          "judge_scores": {
+            "factual": 3.0,
+            "relevance": 3.0,
+            "completeness": 2.0,
+            "reasoning": "The answer suggests seeing a doctor, which is relevant but lacks practical home remedies and is overly focused on clinic details."
+          },
+          "keyword_rate": 0.4,
+          "ammya_score": 0.643,
+          "punctuation_score": 1.0,
+          "judge_norm": 0.55,
+          "final_score": 0.549,
+          "latency_ms": 6561.4
+        },
+        {
+          "question": "ضغط الدم عندي 150/90، ده كده عالي ولا عادي؟",
+          "category": "cardiology",
+          "difficulty": "medium",
+          "actual_preview": "ضغط الدم 150/90 يعتبر ضغط عالي شوية، وده ممكن يكون مؤشر على ارتفاع ضغط الدم. الأحسن إنك تتواصل مع دكتور علشان تتأكد من ح",
+          "judge_scores": {
+            "factual": 5.0,
+            "relevance": 5.0,
+            "completeness": 4.0,
+            "reasoning": "The AI answer is factually correct and relevant, but it lacks advice on immediate actions like resting and rechecking the blood pressure."
+          },
+          "keyword_rate": 0.75,
+          "ammya_score": 0.615,
+          "punctuation_score": 1.0,
+          "judge_norm": 0.95,
+          "final_score": 0.852,
+          "latency_ms": 6649.6
+        },
+        {
+          "question": "إيه أعراض الجلطة عشان لو حصلت ألحقها؟",
+          "category": "emergency",
+          "difficulty": "hard",
+          "actual_preview": "وعليكم السلام ورحمة الله، أهلا بيك، أنا كيمت المساعدة الطبية بتاعتك. بالنسبة لأعراض الجلطة، ممكن تشمل: ألم شديد في الصدر",
+          "judge_scores": {
+            "factual": 3.0,
+            "relevance": 4.0,
+            "completeness": 3.0,
+            "reasoning": "The answer includes some correct symptoms of a stroke but also mixes in symptoms of a heart attack, which can be misleading."
+          },
+          "keyword_rate": 0.6,
+          "ammya_score": 0.15,
+          "punctuation_score": 1.0,
+          "judge_norm": 0.66,
+          "final_score": 0.586,
+          "latency_ms": 4330.5
+        },
+        {
+          "question": "عايز أطمن على السكر، إيه التحاليل اللي أعملها؟",
+          "category": "lab",
+          "difficulty": "medium",
+          "actual_preview": "حضرتك محتاج تعمل تحليل سكر دم صائم، وكمان تحليل سكر دم عشوائي، ويفضل كمان تحليل الهيموجلوبين السكري (HbA1c) عشان يديك فك",
+          "judge_scores": {
+            "factual": 5.0,
+            "relevance": 5.0,
+            "completeness": 4.0,
+            "reasoning": "The answer is factually correct and relevant, but it omits the 'تحليل سكر فاطر' mentioned in the reference answer."
+          },
+          "keyword_rate": 0.0,
+          "ammya_score": 0.5,
+          "punctuation_score": 1.0,
+          "judge_norm": 0.95,
+          "final_score": 0.647,
+          "latency_ms": 7046.3
+        },
+        {
+          "question": "هو المضاد الحيوي بينفع مع أدوار البرد العادية؟",
+          "category": "pharmacology",
+          "difficulty": "medium",
+          "actual_preview": "المضاد الحيوي مش مفيد مع أدوار البرد العادية، لأن أدوار البرد غالبًا بتكون ناتجة عن فيروس، والمضادات الحيوية بتعالج العد",
+          "judge_scores": {
+            "factual": 5.0,
+            "relevance": 5.0,
+            "completeness": 5.0,
+            "reasoning": "The AI answer is factually correct, directly addresses the question, and provides a complete and simple explanation in a conversational tone."
+          },
+          "keyword_rate": 0.6,
+          "ammya_score": 0.672,
+          "punctuation_score": 1.0,
+          "judge_norm": 1.0,
+          "final_score": 0.851,
+          "latency_ms": 6548.9
+        },
+        {
+          "question": "إيه أحسن وجبة خفيفة لمريض السكر بالليل؟",
+          "category": "nutrition",
+          "difficulty": "easy",
+          "actual_preview": "معلش، المعلومة دي مش موجودة عندي. بس بشكل عام، مريض السكر ممكن ياكل وجبة خفيفة زي زبادي قليل الدسم مع شوية فواكه زي التو",
+          "judge_scores": {
+            "factual": 4.0,
+            "relevance": 5.0,
+            "completeness": 4.0,
+            "reasoning": "The answer is mostly accurate and relevant, but it includes fruits which might not be ideal for all diabetic patients at night."
+          },
+          "keyword_rate": 0.8,
+          "ammya_score": 0.774,
+          "punctuation_score": 1.0,
+          "judge_norm": 0.86,
+          "final_score": 0.839,
+          "latency_ms": 5755.8
+        },
+        {
+          "question": "نسيت حباية الضغط النهاردة، أخدها دلوقتي ولا أستنى بكرة؟",
+          "category": "pharmacology",
+          "difficulty": "medium",
+          "actual_preview": "وعليكم السلام ورحمة الله، أهلا بيك، أنا كيمت المساعدة الطبية بتاعتك. بالنسبة لحباية الضغط، لو حضرتك نسيت تاخدها النهاردة",
+          "judge_scores": {
+            "factual": 5.0,
+            "relevance": 5.0,
+            "completeness": 4.0,
+            "reasoning": "The answer is factually correct and relevant, but it could be more complete by explicitly advising against taking two doses close together."
+          },
+          "keyword_rate": 0.5,
+          "ammya_score": 0.39,
+          "punctuation_score": 1.0,
+          "judge_norm": 0.95,
+          "final_score": 0.756,
+          "latency_ms": 4878.2
+        }
+      ],
+      "duration_s": 61.33
+    },
+    {
+      "component": "mcp",
+      "score": 0.713,
+      "avg_slot_coverage": 0.783,
+      "avg_keyword_retrieval": 0.579,
+      "success_rate": 1.0,
+      "total": 30,
+      "latency": {
+        "p50": 4189.644768999642,
+        "p95": 6727.929036000205,
+        "p99": 7282.960311000352,
+        "mean": 4499.745700533458,
+        "count": 30
+      },
+      "sample_count": 30,
+      "category_scores": {
+        "discovery": {
+          "slot_coverage": 0.6,
+          "keyword_retrieval": 0.72,
+          "score": 0.66,
+          "sample_count": 5
+        },
+        "availability": {
+          "slot_coverage": 1.0,
+          "keyword_retrieval": 0.456,
+          "score": 0.728,
+          "sample_count": 9
+        },
+        "pricing": {
+          "slot_coverage": 0.8,
+          "keyword_retrieval": 0.493,
+          "score": 0.647,
+          "sample_count": 10
+        },
+        "booking": {
+          "slot_coverage": 0.583,
+          "keyword_retrieval": 0.792,
+          "score": 0.688,
+          "sample_count": 6
+        }
+      },
+      "details": [
+        {
+          "question": "مين دكاترة عيادة الأسنان؟",
+          "category": "discovery",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "أسنان",
+            "أبانوب",
+            "الفريد",
+            "جاكلين"
+          ],
+          "keyword_hits": [
+            "أسنان",
+            "أبانوب",
+            "الفريد"
+          ],
+          "keyword_misses": [
+            "جاكلين"
+          ],
+          "keyword_retrieval": 0.75,
+          "answer_preview": "في عيادة الأسنان عندنا دكاترة كتير، منهم دكتور ابانوب وديع عزيز، مواعيده يوم الجمعة من 9:00 صباحًاا لحد 1:00 ظهرًا، والأحد من 2:00 ظهرًا لحد 5:00 مساء",
+          "latency_ms": 7283.0
+        },
+        {
+          "question": "دكاترة الجراحة عندكم مين؟",
+          "category": "discovery",
+          "required_slots": {
+            "clinic": "الجراحة"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "جراح",
+            "إبرام",
+            "بيمن",
+            "دكتور"
+          ],
+          "keyword_hits": [
+            "جراح",
+            "بيمن",
+            "دكتور"
+          ],
+          "keyword_misses": [
+            "إبرام"
+          ],
+          "keyword_retrieval": 0.75,
+          "answer_preview": "عندنا في عيادة الجراحة دكاترة كتير، منهم دكتور ميلاد، دكتور بيمن، دكتور كمال، ودكتور مايكل صفون. لو حضرتك محتاج تحجز مع دكتور منهم، ممكن أساعدك في تحد",
+          "latency_ms": 3474.3
+        },
+        {
+          "question": "مين دكاترة الباطنة والروماتيزم عندكم؟",
+          "category": "discovery",
+          "required_slots": {
+            "specialty": "باطن وروماتيزم"
+          },
+          "slot_hits": [],
+          "slot_misses": [
+            "specialty"
+          ],
+          "slot_coverage": 0.0,
+          "expected_keywords": [
+            "باطن",
+            "روماتيزم",
+            "إيريني",
+            "بسمه",
+            "دكتور"
+          ],
+          "keyword_hits": [
+            "باطن",
+            "روماتيزم",
+            "دكتور"
+          ],
+          "keyword_misses": [
+            "إيريني",
+            "بسمه"
+          ],
+          "keyword_retrieval": 0.6,
+          "answer_preview": "عندنا في عيادة الباطنة والروماتيزم دكاترة كتير، منهم: دكتورة ماريانا اسكندر، بتكون موجودة يوم الثلاثاء من 10:00 صباحًاا ل3:00 عصرًا، والخميس من 11:00 ",
+          "latency_ms": 6313.6
+        },
+        {
+          "question": "فيه دكاترة باطنة عندكم؟",
+          "category": "discovery",
+          "required_slots": {
+            "specialty": "باطنة"
+          },
+          "slot_hits": [
+            "specialty"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "باطن",
+            "دكتور",
+            "أبانوب",
+            "أديب"
+          ],
+          "keyword_hits": [
+            "باطن",
+            "دكتور"
+          ],
+          "keyword_misses": [
+            "أبانوب",
+            "أديب"
+          ],
+          "keyword_retrieval": 0.5,
+          "answer_preview": "أيوة، عندنا دكاترة باطنة في المستشفى. الدكتور جورج صفوت موجود يوم السبت من 5:00 مساءً لحد 7:00 مساءً، والجمعة من 7:00 مساءً لحد 9:00 مساءً. الطبيبة جي",
+          "latency_ms": 4561.0
+        },
+        {
+          "question": "امتى بييجي دكتور إبرام في عيادة الجراحة؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "إبرام",
+            "clinic": "الجراحة"
+          },
+          "slot_hits": [
+            "doctor",
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "إبرام",
+            "السبت",
+            "الاثنين",
+            "مساء"
+          ],
+          "keyword_hits": [
+            "إبرام"
+          ],
+          "keyword_misses": [
+            "السبت",
+            "الاثنين",
+            "مساء"
+          ],
+          "keyword_retrieval": 0.25,
+          "answer_preview": "دكتور إبرام مواعيده في عيادة الجراحة يوم الأربعاء من 12:00 ظهرًا لحد 3:00 عصرًا. لو حضرتك محتاج تحجز معاد، ممكن أساعدك في كده.",
+          "latency_ms": 3963.2
+        },
+        {
+          "question": "مواعيد دكتور بيمن عادل الأسبوع ده؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "بيمن"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "بيمن",
+            "السبت",
+            "الأحد",
+            "الاثنين",
+            "مساء"
+          ],
+          "keyword_hits": [
+            "بيمن",
+            "الاثنين",
+            "مساء"
+          ],
+          "keyword_misses": [
+            "السبت",
+            "الأحد"
+          ],
+          "keyword_retrieval": 0.6,
+          "answer_preview": "مواعيد دكتور بيمن عادل الأسبوع ده هي كالتالي: الخميس 10:00 صباحًاا - 11:30 صباحًاا، والاثنين 10:00 صباحًاا - 12:00 ظهرًا، والجمعة 5:00 مساءً - 7:00 مس",
+          "latency_ms": 3858.9
+        },
+        {
+          "question": "دكتور كمال أمين بييجي امتى؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "كمال"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "كمال",
+            "السبت",
+            "الأحد",
+            "الثلاثاء",
+            "الخميس"
+          ],
+          "keyword_hits": [
+            "كمال",
+            "الخميس"
+          ],
+          "keyword_misses": [
+            "السبت",
+            "الأحد",
+            "الثلاثاء"
+          ],
+          "keyword_retrieval": 0.4,
+          "answer_preview": "دكتور كمال أمين مواعيده مش موجودة عندي، لكن ممكن أقول لك مواعيد بعض الأطباء في المستشفى. مثلاً، عندنا الطبيبة سوزان كمال دانيال يوم الاثنين من 10:00 ص",
+          "latency_ms": 4732.2
+        },
+        {
+          "question": "امتى يكون دكتور صفوت منير موجود؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "صفوت"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "صفوت",
+            "الاثنين",
+            "الثلاثاء",
+            "الأربعاء",
+            "صباحاً"
+          ],
+          "keyword_hits": [
+            "صفوت",
+            "صباحاً"
+          ],
+          "keyword_misses": [
+            "الاثنين",
+            "الثلاثاء",
+            "الأربعاء"
+          ],
+          "keyword_retrieval": 0.4,
+          "answer_preview": "دكتور صفوت منير مواعيده كالتالي: يوم الجمعة من 10:30 صباحًاا لحد 11:30 صباحًاا، ويوم الخميس من 4:00 عصرًا لحد 5:00 مساءً. لو حضرتك محتاج تحجز معاد، مم",
+          "latency_ms": 4951.4
+        },
+        {
+          "question": "مواعيد دكتور سامي سعد في الجراحة",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "سامي",
+            "clinic": "الجراحة"
+          },
+          "slot_hits": [
+            "doctor",
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "سامي",
+            "السبت",
+            "الأحد",
+            "الاثنين",
+            "الأربعاء",
+            "الخميس"
+          ],
+          "keyword_hits": [
+            "سامي",
+            "الاثنين",
+            "الأربعاء",
+            "الخميس"
+          ],
+          "keyword_misses": [
+            "السبت",
+            "الأحد"
+          ],
+          "keyword_retrieval": 0.667,
+          "answer_preview": "دكتور سامي سعد مواعيده في الجراحة مش موجودة عندي، لكن ممكن أقول لحضرتك مواعيد بعض الأطباء في تخصص الجراحة. عندنا مواعيد دكتور ان عزت يوم الاثنين من 6:",
+          "latency_ms": 7764.8
+        },
+        {
+          "question": "دكتور رويس ثروت بييجي امتى؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "رويس"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "رويس",
+            "الجمعة",
+            "مساء"
+          ],
+          "keyword_hits": [
+            "رويس"
+          ],
+          "keyword_misses": [
+            "الجمعة",
+            "مساء"
+          ],
+          "keyword_retrieval": 0.333,
+          "answer_preview": "معلش، مفيش معلومات عن مواعيد الدكتور رويس ثروت في المستندات اللي عندي. لو حضرتك محتاج تحجز معاه، ممكن تسأل في الاستقبال أو تتواصل مع العيادة مباشرة. ل",
+          "latency_ms": 3985.1
+        },
+        {
+          "question": "دكتور مايكل صفوت بييجي يوم إيه؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "مايكل صفوت"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "مايكل",
+            "الثلاثاء",
+            "الخميس",
+            "مساء"
+          ],
+          "keyword_hits": [
+            "مايكل"
+          ],
+          "keyword_misses": [
+            "الثلاثاء",
+            "الخميس",
+            "مساء"
+          ],
+          "keyword_retrieval": 0.25,
+          "answer_preview": "معلش، مفيش معلومات عن مواعيد الدكتور مايكل صفوت في المستندات المتاحة عندي. لو حضرتك محتاج تفاصيل أكتر، ممكن تحاول تتواصل مع العيادة مباشرة أو تسأل عن ",
+          "latency_ms": 3455.7
+        },
+        {
+          "question": "بكام الكشف عند دكتور إبرام في الجراحة؟",
+          "category": "pricing",
+          "required_slots": {
+            "doctor": "إبرام",
+            "clinic": "الجراحة"
+          },
+          "slot_hits": [
+            "doctor",
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "إبرام",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "إبرام",
+            "كشف",
+            "200",
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "50"
+          ],
+          "keyword_retrieval": 0.8,
+          "answer_preview": "حضرتك، مفيش معلومات عن سعر الكشف عند الدكتور إبرام في الجراحة، لكن في معلومات عن أسعار الكشف عند دكتور ابانوب وديع، وسعر الكشف عنده 200 جنيه. لو محتاج",
+          "latency_ms": 3387.1
+        },
+        {
+          "question": "سعر كشف دكتور مايكل صفوت كام؟",
+          "category": "pricing",
+          "required_slots": {
+            "doctor": "مايكل صفوت"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "مايكل",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "مايكل",
+            "كشف"
+          ],
+          "keyword_misses": [
+            "50",
+            "200",
+            "جنيه"
+          ],
+          "keyword_retrieval": 0.4,
+          "answer_preview": "معلش، المعلومة عن سعر كشف الدكتور مايكل صفوت مش موجودة عندي. لو حضرتك محتاج تعرف سعر الكشف، ممكن تتواصل مع العيادة مباشرة أو تحجز معاد معاه. لو في أي ",
+          "latency_ms": 3587.2
+        },
+        {
+          "question": "بكام الكشف في عيادة الأسنان؟",
+          "category": "pricing",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "أسنان",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "أسنان",
+            "كشف",
+            "50",
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "200"
+          ],
+          "keyword_retrieval": 0.8,
+          "answer_preview": "سعر الكشف في عيادة الأسنان مش محدد بشكل واضح في المستندات، لكن فيه أسعار لبعض الخدمات زي تنظيف الأسنان اللي بتكلف 300 جنيه، وجراحة اللثة اللي بتبدأ من",
+          "latency_ms": 4323.1
+        },
+        {
+          "question": "كام سعر حشو الأسنان البلاتيني؟",
+          "category": "pricing",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "حشو",
+            "بلاتيني",
+            "500",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "حشو",
+            "بلاتيني",
+            "500"
+          ],
+          "keyword_retrieval": 0.25,
+          "answer_preview": "سعر كشف في عيادة الأسنان بيبدأ من ١٠٠ جنيه، لكن الأسعار ممكن تختلف حسب الخدمة اللي حضرتك محتاجها. لو عايز تفاصيل أكتر عن أي خدمة معينة، ممكن أساعدك. ل",
+          "latency_ms": 3827.1
+        },
+        {
+          "question": "سعر حشو الكمبوزيت كام؟",
+          "category": "pricing",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [],
+          "slot_misses": [
+            "clinic"
+          ],
+          "slot_coverage": 0.0,
+          "expected_keywords": [
+            "حشو",
+            "كمبوزيت",
+            "650",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "حشو",
+            "كمبوزيت",
+            "650"
+          ],
+          "keyword_retrieval": 0.25,
+          "answer_preview": "سعر كشف الدكتور ابانوب وديع هو 200 جنيه. لو محتاج أي مساعدة تانية، أنا هنا.",
+          "latency_ms": 3246.5
+        },
+        {
+          "question": "بكام تبييض الأسنان؟",
+          "category": "pricing",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "تبييض",
+            "4000",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "تبييض",
+            "4000"
+          ],
+          "keyword_retrieval": 0.333,
+          "answer_preview": "صباح النور، أهلا بيك. سعر كشف في عيادة الأسنان بيبدأ من ١٠٠ جنيه. لو محتاج أي خدمة تانية أو تفاصيل أكتر، ممكن أساعدك.",
+          "latency_ms": 3412.2
+        },
+        {
+          "question": "سعر تركيبة الزيركون كام؟",
+          "category": "pricing",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [],
+          "slot_misses": [
+            "clinic"
+          ],
+          "slot_coverage": 0.0,
+          "expected_keywords": [
+            "زيركون",
+            "2100",
+            "جنيه",
+            "وحدة"
+          ],
+          "keyword_hits": [
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "زيركون",
+            "2100",
+            "وحدة"
+          ],
+          "keyword_retrieval": 0.25,
+          "answer_preview": "سعر كشف الدكتور ابانوب وديع هو 200 جنيه. لو محتاج أي مساعدة تانية، أنا هنا.",
+          "latency_ms": 3835.4
+        },
+        {
+          "question": "بكام تركيبة البورسلين؟",
+          "category": "pricing",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "بورسلين",
+            "1200",
+            "جنيه",
+            "وحدة"
+          ],
+          "keyword_hits": [
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "بورسلين",
+            "1200",
+            "وحدة"
+          ],
+          "keyword_retrieval": 0.25,
+          "answer_preview": "سعر كشف في عيادة الأسنان بيبدأ من ١٠٠ جنيه، لكن الأسعار ممكن تختلف حسب الخدمة اللي حضرتك محتاجها. لو عايز تفاصيل أكتر عن خدمات معينة أو أسعارها، ممكن ",
+          "latency_ms": 3854.1
+        },
+        {
+          "question": "سعر كشف دكتور أبانوب ذكري في الأسنان؟",
+          "category": "pricing",
+          "required_slots": {
+            "doctor": "أبانوب",
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [
+            "doctor",
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "أبانوب",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "أبانوب",
+            "كشف",
+            "200",
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "50"
+          ],
+          "keyword_retrieval": 0.8,
+          "answer_preview": "سعر كشف الدكتور أبانوب ذكري في الأسنان هو 200 جنيه. لو حضرتك محتاج تحجز معاد، ممكن أساعدك في كده.",
+          "latency_ms": 3074.4
+        },
+        {
+          "question": "عايز أحجز عند دكتور جراحة",
+          "category": "booking",
+          "required_slots": {
+            "clinic": "الجراحة"
+          },
+          "slot_hits": [],
+          "slot_misses": [
+            "clinic"
+          ],
+          "slot_coverage": 0.0,
+          "expected_keywords": [
+            "حجز",
+            "جراح",
+            "ميعاد",
+            "تحجز"
+          ],
+          "keyword_hits": [
+            "حجز",
+            "تحجز"
+          ],
+          "keyword_misses": [
+            "جراح",
+            "ميعاد"
+          ],
+          "keyword_retrieval": 0.5,
+          "answer_preview": "حضرتك ممكن تحجز عند دكتور جورج رياض يوم الأربع الجاي، من 1:00 ظهرًا لحد 2:00 ظهرًا، أو ممكن تحجز عند دكتور مايكل اميل لبيب يوم الجمعة من 11:00 صباحًاا",
+          "latency_ms": 5019.5
+        },
+        {
+          "question": "احجز لي موعد مع دكتور إبرام سعيد",
+          "category": "booking",
+          "required_slots": {
+            "doctor": "إبرام",
+            "clinic": "الجراحة"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [
+            "clinic"
+          ],
+          "slot_coverage": 0.5,
+          "expected_keywords": [
+            "إبرام",
+            "حجز",
+            "ميعاد",
+            "تحجز"
+          ],
+          "keyword_hits": [
+            "إبرام",
+            "حجز",
+            "تحجز"
+          ],
+          "keyword_misses": [
+            "ميعاد"
+          ],
+          "keyword_retrieval": 0.75,
+          "answer_preview": "معلش، مفيش معلومات عن مواعيد الدكتور إبرام سعيد في المستندات المتاحة عندي. لو حضرتك محتاج تحجز مع دكتور تاني، ممكن أساعدك في كده. أو لو عندك أي استفسا",
+          "latency_ms": 4189.6
+        },
+        {
+          "question": "عايز أعمل حجز في عيادة الأسنان",
+          "category": "booking",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "أسنان",
+            "حجز",
+            "ميعاد",
+            "تحجز"
+          ],
+          "keyword_hits": [
+            "أسنان",
+            "حجز",
+            "تحجز"
+          ],
+          "keyword_misses": [
+            "ميعاد"
+          ],
+          "keyword_retrieval": 0.75,
+          "answer_preview": "أهلا بيك، حضرتك عايز تحجز في عيادة الأسنان. مواعيد عيادة الأسنان كالتالي: عندنا دكتور ابانوب وديع عزيز يوم الجمعة من 9:00 صباحًاا لحد 1:00 ظهرًا، والأ",
+          "latency_ms": 6727.9
+        },
+        {
+          "question": "محتاج حجز عند دكتور أسنان يوم السبت",
+          "category": "booking",
+          "required_slots": {
+            "clinic": "الأسنان"
+          },
+          "slot_hits": [],
+          "slot_misses": [
+            "clinic"
+          ],
+          "slot_coverage": 0.0,
+          "expected_keywords": [
+            "أسنان",
+            "حجز",
+            "السبت",
+            "تحجز"
+          ],
+          "keyword_hits": [
+            "أسنان",
+            "حجز",
+            "السبت",
+            "تحجز"
+          ],
+          "keyword_misses": [],
+          "keyword_retrieval": 1.0,
+          "answer_preview": "حضرتك ممكن تحجز عند دكتور أسنان يوم السبت، المواعيد المتاحة هي من ٥:٠٠ مساءً لحد ٨:٠٠ مساءً. لو عايز تحجز، قوليلي عشان أساعدك في تحديد المعاد المناسب.",
+          "latency_ms": 4491.9
+        },
+        {
+          "question": "احجزلي عند دكتور بيمن الأحد الجاي",
+          "category": "booking",
+          "required_slots": {
+            "doctor": "بيمن"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "بيمن",
+            "حجز",
+            "الأحد",
+            "تحجز"
+          ],
+          "keyword_hits": [
+            "بيمن",
+            "حجز",
+            "الأحد",
+            "تحجز"
+          ],
+          "keyword_misses": [],
+          "keyword_retrieval": 1.0,
+          "answer_preview": "حضرتك ممكن تحجز عند دكتور بيمن يوم الأحد الجاي، عنده معاد من 11:00 صباحًاا لحد 12:00 ظهرًا. لو عايز تحجز، قوليلي وأنا أساعدك في كده.",
+          "latency_ms": 3259.4
+        },
+        {
+          "question": "هل دكتور كمال أمين متاح يوم الثلاثاء؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "كمال"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "كمال",
+            "الثلاثاء",
+            "11:00",
+            "1:00",
+            "مساء"
+          ],
+          "keyword_hits": [
+            "كمال",
+            "الثلاثاء",
+            "11:00",
+            "1:00",
+            "مساء"
+          ],
+          "keyword_misses": [],
+          "keyword_retrieval": 1.0,
+          "answer_preview": "دكتور كمال أمين مش موجود في المواعيد المتاحة، لكن فيه مواعيد لأطباء تانيين يوم الثلاثاء. مثلاً، دكتور مارك عزت لحظى متاح من 11:00 صباحًاا لحد 3:00 عصر",
+          "latency_ms": 4352.8
+        },
+        {
+          "question": "دكتور جون كمال بييجي الأسبوع ده؟",
+          "category": "availability",
+          "required_slots": {
+            "doctor": "جون"
+          },
+          "slot_hits": [
+            "doctor"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "جون",
+            "الاثنين",
+            "الثلاثاء",
+            "الأربعاء",
+            "مساء"
+          ],
+          "keyword_hits": [
+            "جون"
+          ],
+          "keyword_misses": [
+            "الاثنين",
+            "الثلاثاء",
+            "الأربعاء",
+            "مساء"
+          ],
+          "keyword_retrieval": 0.2,
+          "answer_preview": "معلش، مفيش معلومات عن مواعيد الدكتور جون كمال في المستندات المتاحة عندي. لو حضرتك محتاج تحجز مع دكتور معين، ممكن أساعدك في حجز مع دكتور تاني أو توجيهك",
+          "latency_ms": 4849.3
+        },
+        {
+          "question": "فيه دكتورة تخصص روماتيزم ومناعة؟",
+          "category": "discovery",
+          "required_slots": {
+            "specialty": "روماتيزم وأمراض مناعة"
+          },
+          "slot_hits": [],
+          "slot_misses": [
+            "specialty"
+          ],
+          "slot_coverage": 0.0,
+          "expected_keywords": [
+            "روماتيزم",
+            "مناعة",
+            "دكتور"
+          ],
+          "keyword_hits": [
+            "روماتيزم",
+            "مناعة",
+            "دكتور"
+          ],
+          "keyword_misses": [],
+          "keyword_retrieval": 1.0,
+          "answer_preview": "حضرتك ممكن تروح للدكتورة جاكلين فؤاد، هي متخصصة في الروماتيزم والمناعة، وبتكون موجودة يوم السبت من 8:30 صباحًاا لحد 12:00 ظهرًا، والأحد من 4:00 عصرًا ",
+          "latency_ms": 5370.7
+        },
+        {
+          "question": "كام سعر الكشف عند دكاترة الجراحة؟",
+          "category": "pricing",
+          "required_slots": {
+            "clinic": "الجراحة"
+          },
+          "slot_hits": [
+            "clinic"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "جراح",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+          ],
+          "keyword_hits": [
+            "جراح",
+            "كشف",
+            "200",
+            "جنيه"
+          ],
+          "keyword_misses": [
+            "50"
+          ],
+          "keyword_retrieval": 0.8,
+          "answer_preview": "سعر الكشف عند دكاترة الجراحة بيختلف حسب الدكتور، لكن في معلومة عن الدكتور ابانوب وديع، سعر الكشف عنده 200 جنيه. لو حضرتك عايز تفاصيل أكتر عن دكاترة تا",
+          "latency_ms": 4305.9
+        },
+        {
+          "question": "احجز موعد مع دكتور باطنة",
+          "category": "booking",
+          "required_slots": {
+            "specialty": "باطنة"
+          },
+          "slot_hits": [
+            "specialty"
+          ],
+          "slot_misses": [],
+          "slot_coverage": 1.0,
+          "expected_keywords": [
+            "باطن",
+            "حجز",
+            "ميعاد",
+            "تحجز"
+          ],
+          "keyword_hits": [
+            "باطن",
+            "حجز",
+            "تحجز"
+          ],
+          "keyword_misses": [
+            "ميعاد"
+          ],
+          "keyword_retrieval": 0.75,
+          "answer_preview": "حضرتك ممكن تحجز مع دكتور باطنة، عندك كذا اختيار. ممكن تحجز مع الدكتور جورج صفوت يوم الجمعة من 7:00 مساءً لحد 9:00 مساءً، أو مع الطبيبة جينا عماد يوم ا",
+          "latency_ms": 5535.3
+        }
+      ],
+      "duration_s": 135.0
+    },
+    {
+      "component": "rag",
+      "score": 0.0,
+      "avg_precision": 0.0,
+      "avg_recall": 0.0,
+      "avg_f1": 0.0,
+      "mrr": 0.0,
+      "ndcg_at_5": 0.0,
+      "hit_rate_at_1": 0.0,
+      "hit_rate_at_3": 0.0,
+      "hit_rate_at_5": 0.0,
+      "avg_excerpt_coverage": 0.0,
+      "latency": {
+        "p50": 4010.1401020001504,
+        "p95": 5602.267140999174,
+        "p99": 5602.267140999174,
+        "mean": 4558.153165399926,
+        "count": 10
+      },
+      "sample_count": 10,
+      "category_breakdown": {
+        "medical_ethics": {
+          "avg_f1": 0.0,
+          "avg_excerpt_coverage": 0.0,
+          "count": 10
+        }
+      },
+      "details": [
+        {
+          "question": "متى يجوز للطبيب إفشاء سر المريض؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "اﻟﺴﺮﻳّﺔ اﺣﺘﺮام ﻋﺪم",
+            "أﻃﺮاف اﺷﻌﺎر",
+            "ﺧﻮﻓﺎ",
+            "ﻣﻀﺮّة",
+            "اﻟﻌﻘﻠﻴّﺔ اﻷﻣﺮاض",
+            "ﺑﺎﻟﺴﻴﺪا"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "ما هي شروط الإجهاض الطبي؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "اﻻﺟﻬﺎض",
+            "اﻟﻤﺸﻜﻮك ﻓﻰ ﺑﻘﺎءﻩ",
+            "ﺗﺸﻮّﻩ ﻟﺘﺮآﻴﺒﺔ"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "ماذا يفعل الطبيب إذا اختلف أقارب المريض على طريقة العلاج وكان المريض قاصراً أو فاقداً للوعي؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "وﺳﻴﻂ دور ﻳﻠﻌﺐ",
+            "اﻟﺨﻼف ﺗﻤﺎدى"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "هل يحق للمريض استشارة طبيب آخر لنفس المرض؟ وكيف يتصرف الطبيب الأول؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "ﺁﺧﺮ ﻃﺒﻴﺐ اﺳﺘﺸﺎرة",
+            "ﺗﺒﺬﻳﺮا ﻟﻠﻤﺮﻳﺾ"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "من يتخذ القرار الطبي للمريض القاصر؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "اﻟﻘﺎﺻﺮ اﻟﻤﺮﻳﺾ",
+            "اﻟﻤﺮﻳﺾ ﻣﺼﻠﺤﺔ",
+            "اﻟﻘﺮار ﺻﺎﺣﺐ ﻣﻤﺜّﻠﻪ"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "ما هى واجبات الطبيب نحو المجتمع؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "اﻟﻤﺠﺘﻤﻊ ﻧﺤﻮ واﺟﺒﺎﺗﻪ",
+            "اﻟﻌﺎﻟﻤﻴّﺔ اﻟﺼﺤّﺔ ﺗﻄﻮﻳﺮ"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "ما هي المبادئ الثلاثة التي تشرف على القيمة الخاصة للسرية الطبية؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "واﻟﺜﻘﺔ",
+            "اﻟﻐﻴﺮ واﺣﺘﺮام",
+            "اﻷﺳﺘﻘﻼﻟﻴّﺔ"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "هل يجوز إفشاء السر المهني بعد وفاة المريض؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "ﻣﻮﺗﻪ ﺑﻌﺪ ﺣﺘّﻰ اﻟﻤﺮﻳﺾ",
+            "اﻟﺴﺮّ ﺗﺠﺎوز ﻳﺠﻮزﻓﻴﻬﺎ"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "كيف يتصرف الطبيب المعالج لمريض مصاب بالسيدا يرفض إخبار زوجه؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "ﺑﺎﻟﺴﻴﺪا ﻣﺼﺎب",
+            "اﻟﺴﺮﻳّﺔ اﺣﺘﺮام ﻋﺪم",
+            "اﻟﺮﻓﻴﻖ أو اﻟﺰوج"
+          ],
+          "excerpt_coverage": 0.0
+        },
+        {
+          "question": "ما هو موقف الأخلاقيات الطبية من استعمال المضغات في البحث العلمي؟",
+          "category": "medical_ethics",
+          "retrieved": [
+            "supabase_1759046810942-soz0donj9o.docx"
+          ],
+          "ground_truth": [
+            "ethics_manual_arabic.pdf"
+          ],
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "critical_excerpts": [
+            "اﻟﻌﻠﻤﻰ ﺑﺎﻟﺒﺤﺚ",
+            "ﻣﻀﻐﺎت اﺳﺘﻌﻤﺎل"
+          ],
+          "excerpt_coverage": 0.0
+        }
+      ],
+      "duration_s": 45.58
+    }
+  ]
+}

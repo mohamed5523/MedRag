@@ -1,0 +1,548 @@
+[
+    {
+        "id": 1,
+        "question": "مين دكاترة عيادة الأسنان؟",
+        "expected_intent": "list_doctors",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "discovery",
+        "expected_keywords": [
+            "أسنان",
+            "أبانوب",
+            "الفريد",
+            "جاكلين"
+        ]
+    },
+    {
+        "id": 2,
+        "question": "دكاترة الجراحة عندكم مين؟",
+        "expected_intent": "list_doctors",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الجراحة"
+        },
+        "optional_slots": {},
+        "category": "discovery",
+        "expected_keywords": [
+            "جراح",
+            "إبرام",
+            "بيمن",
+            "دكتور"
+        ]
+    },
+    {
+        "id": 3,
+        "question": "مين دكاترة الباطنة والروماتيزم عندكم؟",
+        "expected_intent": "list_doctors",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "specialty": "باطن وروماتيزم"
+        },
+        "optional_slots": {},
+        "category": "discovery",
+        "expected_keywords": [
+            "باطن",
+            "روماتيزم",
+            "إيريني",
+            "بسمه",
+            "دكتور"
+        ]
+    },
+    {
+        "id": 4,
+        "question": "فيه دكاترة باطنة عندكم؟",
+        "expected_intent": "list_doctors",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "specialty": "باطنة"
+        },
+        "optional_slots": {},
+        "category": "discovery",
+        "expected_keywords": [
+            "باطن",
+            "دكتور",
+            "أبانوب",
+            "أديب"
+        ]
+    },
+    {
+        "id": 5,
+        "question": "امتى بييجي دكتور إبرام في عيادة الجراحة؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "إبرام",
+            "clinic": "الجراحة"
+        },
+        "optional_slots": {},
+        "category": "availability",
+        "expected_keywords": [
+            "إبرام",
+            "السبت",
+            "الاثنين",
+            "مساء"
+        ]
+    },
+    {
+        "id": 6,
+        "question": "مواعيد دكتور بيمن عادل الأسبوع ده؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "بيمن"
+        },
+        "optional_slots": {
+            "date": "الأسبوع ده"
+        },
+        "category": "availability",
+        "expected_keywords": [
+            "بيمن",
+            "السبت",
+            "الأحد",
+            "الاثنين",
+            "مساء"
+        ]
+    },
+    {
+        "id": 7,
+        "question": "دكتور كمال أمين بييجي امتى؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "كمال"
+        },
+        "optional_slots": {},
+        "category": "availability",
+        "expected_keywords": [
+            "كمال",
+            "السبت",
+            "الأحد",
+            "الثلاثاء",
+            "الخميس"
+        ]
+    },
+    {
+        "id": 8,
+        "question": "امتى يكون دكتور صفوت منير موجود؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "صفوت"
+        },
+        "optional_slots": {},
+        "category": "availability",
+        "expected_keywords": [
+            "صفوت",
+            "الاثنين",
+            "الثلاثاء",
+            "الأربعاء",
+            "صباحاً"
+        ]
+    },
+    {
+        "id": 9,
+        "question": "مواعيد دكتور سامي سعد في الجراحة",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "سامي",
+            "clinic": "الجراحة"
+        },
+        "optional_slots": {},
+        "category": "availability",
+        "expected_keywords": [
+            "سامي",
+            "السبت",
+            "الأحد",
+            "الاثنين",
+            "الأربعاء",
+            "الخميس"
+        ]
+    },
+    {
+        "id": 10,
+        "question": "دكتور رويس ثروت بييجي امتى؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "رويس"
+        },
+        "optional_slots": {},
+        "category": "availability",
+        "expected_keywords": [
+            "رويس",
+            "الجمعة",
+            "مساء"
+        ]
+    },
+    {
+        "id": 11,
+        "question": "دكتور مايكل صفوت بييجي يوم إيه؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "مايكل صفوت"
+        },
+        "optional_slots": {},
+        "category": "availability",
+        "expected_keywords": [
+            "مايكل",
+            "الثلاثاء",
+            "الخميس",
+            "مساء"
+        ]
+    },
+    {
+        "id": 12,
+        "question": "بكام الكشف عند دكتور إبرام في الجراحة؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "إبرام",
+            "clinic": "الجراحة"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "إبرام",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 13,
+        "question": "سعر كشف دكتور مايكل صفوت كام؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "مايكل صفوت"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "مايكل",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 14,
+        "question": "بكام الكشف في عيادة الأسنان؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "أسنان",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 15,
+        "question": "كام سعر حشو الأسنان البلاتيني؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "حشو",
+            "بلاتيني",
+            "500",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 16,
+        "question": "سعر حشو الكمبوزيت كام؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "حشو",
+            "كمبوزيت",
+            "650",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 17,
+        "question": "بكام تبييض الأسنان؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "تبييض",
+            "4000",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 18,
+        "question": "سعر تركيبة الزيركون كام؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "زيركون",
+            "2100",
+            "جنيه",
+            "وحدة"
+        ]
+    },
+    {
+        "id": 19,
+        "question": "بكام تركيبة البورسلين؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "بورسلين",
+            "1200",
+            "جنيه",
+            "وحدة"
+        ]
+    },
+    {
+        "id": 20,
+        "question": "سعر كشف دكتور أبانوب ذكري في الأسنان؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "أبانوب",
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "أبانوب",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 21,
+        "question": "عايز أحجز عند دكتور جراحة",
+        "expected_intent": "book_appointment",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الجراحة"
+        },
+        "optional_slots": {
+            "doctor": null,
+            "date": null
+        },
+        "category": "booking",
+        "expected_keywords": [
+            "حجز",
+            "جراح",
+            "ميعاد",
+            "تحجز"
+        ]
+    },
+    {
+        "id": 22,
+        "question": "احجز لي موعد مع دكتور إبرام سعيد",
+        "expected_intent": "book_appointment",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "إبرام",
+            "clinic": "الجراحة"
+        },
+        "optional_slots": {
+            "date": null
+        },
+        "category": "booking",
+        "expected_keywords": [
+            "إبرام",
+            "حجز",
+            "ميعاد",
+            "تحجز"
+        ]
+    },
+    {
+        "id": 23,
+        "question": "عايز أعمل حجز في عيادة الأسنان",
+        "expected_intent": "book_appointment",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {
+            "date": null
+        },
+        "category": "booking",
+        "expected_keywords": [
+            "أسنان",
+            "حجز",
+            "ميعاد",
+            "تحجز"
+        ]
+    },
+    {
+        "id": 24,
+        "question": "محتاج حجز عند دكتور أسنان يوم السبت",
+        "expected_intent": "book_appointment",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الأسنان"
+        },
+        "optional_slots": {
+            "date": "السبت"
+        },
+        "category": "booking",
+        "expected_keywords": [
+            "أسنان",
+            "حجز",
+            "السبت",
+            "تحجز"
+        ]
+    },
+    {
+        "id": 25,
+        "question": "احجزلي عند دكتور بيمن الأحد الجاي",
+        "expected_intent": "book_appointment",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "بيمن"
+        },
+        "optional_slots": {
+            "date": "الأحد الجاي",
+            "clinic": "الجراحة"
+        },
+        "category": "booking",
+        "expected_keywords": [
+            "بيمن",
+            "حجز",
+            "الأحد",
+            "تحجز"
+        ]
+    },
+    {
+        "id": 26,
+        "question": "هل دكتور كمال أمين متاح يوم الثلاثاء؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "كمال"
+        },
+        "optional_slots": {
+            "date": "الثلاثاء"
+        },
+        "category": "availability",
+        "expected_keywords": [
+            "كمال",
+            "الثلاثاء",
+            "11:00",
+            "1:00",
+            "مساء"
+        ]
+    },
+    {
+        "id": 27,
+        "question": "دكتور جون كمال بييجي الأسبوع ده؟",
+        "expected_intent": "check_availability",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "doctor": "جون"
+        },
+        "optional_slots": {
+            "date": "الأسبوع ده"
+        },
+        "category": "availability",
+        "expected_keywords": [
+            "جون",
+            "الاثنين",
+            "الثلاثاء",
+            "الأربعاء",
+            "مساء"
+        ]
+    },
+    {
+        "id": 28,
+        "question": "فيه دكتورة تخصص روماتيزم ومناعة؟",
+        "expected_intent": "list_doctors",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "specialty": "روماتيزم وأمراض مناعة"
+        },
+        "optional_slots": {},
+        "category": "discovery",
+        "expected_keywords": [
+            "روماتيزم",
+            "مناعة",
+            "دكتور"
+        ]
+    },
+    {
+        "id": 29,
+        "question": "كام سعر الكشف عند دكاترة الجراحة؟",
+        "expected_intent": "ask_price",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "clinic": "الجراحة"
+        },
+        "optional_slots": {},
+        "category": "pricing",
+        "expected_keywords": [
+            "جراح",
+            "كشف",
+            "50",
+            "200",
+            "جنيه"
+        ]
+    },
+    {
+        "id": 30,
+        "question": "احجز موعد مع دكتور باطنة",
+        "expected_intent": "book_appointment",
+        "expected_mode": "mcp",
+        "required_slots": {
+            "specialty": "باطنة"
+        },
+        "optional_slots": {
+            "date": null,
+            "doctor": null
+        },
+        "category": "booking",
+        "expected_keywords": [
+            "باطن",
+            "حجز",
+            "ميعاد",
+            "تحجز"
+        ]
+    }
+]

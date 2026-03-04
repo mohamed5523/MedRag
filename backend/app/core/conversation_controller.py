@@ -332,6 +332,8 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
       clear clinic context (clinic + clinic_id).
     - If user explicitly mentions a clinic but does NOT explicitly mention a doctor,
       clear doctor context (doctor + provider_id).
+    - If user asks a generic question with NO entity mentions at all (e.g., "مين الدكاترة؟"),
+      clear stale doctor/provider_id so the query isn't constrained to an old context.
     """
     has_doc = _explicit_doctor_mention(query_text)
     has_clinic = _explicit_clinic_mention(query_text)
@@ -342,7 +344,7 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
         if hasattr(entities, "clinic_id"):
             entities.clinic_id = None
 
-    if has_clinic and not has_doc:
+    elif has_clinic and not has_doc:
         # If user explicitly mentioned a clinic this turn, overwrite any stale clinic from previous state.
         extracted = _extract_clinic_phrase(query_text)
         if extracted and hasattr(entities, "clinic"):
@@ -354,6 +356,21 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
             entities.doctor = None
         if hasattr(entities, "provider_id"):
             entities.provider_id = None
+
+    elif not has_doc and not has_clinic:
+        # Generic query with no entity mentions at all.
+        # Clear stale doctor/provider_id to avoid constraining new queries.
+        # Keep clinic context if it was set (user might still be in same clinic scope).
+        _generic_intent_keywords = {
+            "مين", "الدكاترة", "دكاترة", "اسماء", "موجود", "موجودين",
+            "النهارده", "بكره", "المواعيد", "عايز", "عايزه", "محتاج",
+        }
+        query_lower = query_text.strip()
+        if any(kw in query_lower for kw in _generic_intent_keywords):
+            if hasattr(entities, "doctor"):
+                entities.doctor = None
+            if hasattr(entities, "provider_id"):
+                entities.provider_id = None
 
 
 def format_provider_disambiguation_prompt(candidates: list[dict[str, Any]]) -> str:

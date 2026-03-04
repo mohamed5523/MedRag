@@ -137,7 +137,7 @@ TOOL_PLAN = {
 class LLMRouter:
     """LLM-based intelligent router for MCP vs RAG decisions."""
     
-    def __init__(self, model: str = "gpt-4o-mini"):
+    def __init__(self, model: str = "gpt-4o"):
         self.api_key = os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             logger.warning("OPENAI_API_KEY not found. Falling back to rule-based routing.")

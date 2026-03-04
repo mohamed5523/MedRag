@@ -12,7 +12,7 @@ class FakeQAEngine:
     def build_time_context(self, question, now_dt=None):
         return {"is_arabic": True, "tz_name": "Africa/Cairo", "date_hint": "اليوم", "time_context_message": "stub"}
 
-    async def answer_question(self, *, question, contexts, time_context, chat_history=None):
+    async def answer_question(self, *, question, contexts, time_context, chat_history=None, user_gender=None):
         # Return a simple merged answer so the test doesn't depend on LLM behavior.
         return {
             "answer": "ok-multi",
@@ -38,14 +38,14 @@ class FakeMCPClient:
             ]
         )
 
-    async def get_clinic_provider_schedule(self, clinic_id, provider_id=None, day_id=None):
+    async def get_clinic_provider_schedule(self, clinic_id: int, date_from: str, date_to: str, provider_id=None):
         self.calls.append("get_clinic_provider_schedule")
         return ProviderScheduleResponse(
             slots=[
                 ScheduleSlot(
                     clinic_id=clinic_id,
                     provider_id=provider_id,
-                    day_id=day_id,
+                    day_id=getattr(self, "_expected_day_id", 1),
                     day_name="Tuesday",
                     shift_start="20:00",
                     shift_end="22:00",

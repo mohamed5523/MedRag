@@ -12,6 +12,7 @@ import VoiceInterface from "./pages/VoiceInterface";
 import NotFound from "./pages/NotFound";
 import AuthGuard from "./components/AuthGuard";
 import { AuthProvider } from "./hooks/useAuth";
+import EvaluationDashboard from "./pages/EvaluationDashboard";
 
 const queryClient = new QueryClient();
 
@@ -59,7 +60,10 @@ const App = () => (
               }
             />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            {/* Evaluation dashboard — internal tool, no auth guard */}
+            <Route path="/evaluation" element={<EvaluationDashboard />} />
             <Route path="*" element={<NotFound />} />
+
           </Routes>
         </BrowserRouter>
       </AuthProvider>
