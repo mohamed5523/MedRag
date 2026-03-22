@@ -1,0 +1,43 @@
+# docker-compose.local.yml
+# Local development override — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up
+#
+# Key differences from production (docker-compose.yml):
+#   1. Frontend service is disabled (Vite dev server handles it instead).
+#   2. SSL/letsencrypt volume removed.
+#   3. All backend services expose ports to localhost for easy debugging.
+
+services:
+  # ─── Disable the production frontend container ──────────────────────────────
+  # The frontend is served via `npm run dev` (Vite) for hot-reload.
+  frontend:
+    profiles:
+      - disabled   # Never started unless you explicitly --profile disabled
+
+  # ─── Weaviate – no changes needed, just confirm no extra mounts ─────────────
+  weaviate:
+    restart: "no"
+
+  # ─── Backend ────────────────────────────────────────────────────────────────
+  backend:
+    restart: "no"
+
+  # ─── MCP Server ─────────────────────────────────────────────────────────────
+  mcp-server:
+    restart: "no"
+
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    restart: "no"
+
+  # ─── Phoenix (observability) ────────────────────────────────────────────────
+  phoenix:
+    restart: "no"
+
+  # ─── Prometheus ─────────────────────────────────────────────────────────────
+  prometheus:
+    restart: "no"
+
+  # ─── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    restart: "no"

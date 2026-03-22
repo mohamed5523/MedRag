@@ -1,3 +1,4 @@
+
 """
 evaluation/dashboard.py
 -----------------------
@@ -189,11 +190,12 @@ Arabic has rich morphology so even a 20% WER can feel acceptable in conversation
     # ── LLM ───────────────────────────────────────────────────────────────────
     elif comp == "llm":
         st.subheader("🤖 LLM — Answer Quality & Arabic Fluency")
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Final score",         f"{score:.3f}")
         c2.metric("Avg judge score",      f"{r.get('avg_judge_score', 0):.3f}", help="GPT-4o judge score, normalised to [0,1]")
         c3.metric("Keyword rate",         f"{r.get('avg_keyword_rate', 0):.1%}", help="Expected Arabic terms found in answer")
-        c4.metric("Punctuation score",    f"{r.get('avg_punctuation_score', 0):.3f}", help="Egyptian Arabic comma density + termination")
+        c4.metric("Syntax match",         f"{r.get('avg_syntax_score', 0):.1%}", help="ROUGE-L text overlap F1 score vs expected answer")
+        c5.metric("Punctuation score",    f"{r.get('avg_punctuation_score', 0):.3f}", help="Egyptian Arabic comma density + termination")
 
         st.markdown("---")
         st.markdown("""
@@ -201,21 +203,26 @@ Arabic has rich morphology so even a 20% WER can feel acceptable in conversation
 
 | Metric | Weight | Target | Meaning |
 |--------|--------|--------|---------|
-| Judge score | **63%** | > 0.70 | GPT-4o evaluates: Factual (45%) · Relevance (30%) · Completeness (25%) on a 1–5 scale |
-| Keyword rate | **27%** | > 0.80 | Fraction of expected Arabic medical terms that appear in the answer |
-| Punctuation | **10%** | > 0.65 | Did the model use Arabic/English commas correctly and end sentences properly? |
+| Judge score | **45%** | > 0.70 | GPT-4o evaluates: Factual (45%) · Relevance (30%) · Completeness (25%) on a 1–5 scale |
+| Keyword rate | **20%** | > 0.80 | Fraction of expected Arabic medical terms that appear in the answer |
+| Syntax match | **20%** | > 0.50 | ROUGE-L overlapping text score comparing exact words to the reference |
+| Egyptian Ammya| **10%** | > 0.50 | Matches expected Egyptian dialect words |
+| Punctuation | **5%** | > 0.65 | Did the model use Arabic/English commas correctly and end sentences properly? |
 
-`Final = 0.63 × judge + 0.27 × keywords + 0.10 × punctuation`
+`Final = 0.45 × judge + 0.20 × keywords + 0.20 × syntax + 0.10 × ammya + 0.05 × punctuation`
 
 **🔍 Behind the Numbers:**
-- **Judge Score (63%):** A weighted combination. **Factual Correctness (45%)** strictly checks for medical accuracy and penalises hallucinations. **Relevance (30%)** ensures the user's specific context (e.g., pricing, reservations, illnesses) is directly addressed. **Completeness (25%)** verifies if all core expected information is presented. A Judge score of 0.60 means the raw average is ~3/5; the model answers but lacks depth or misses facts.
-- **Keyword Rate (27%):** A deterministic check. A rate of 0.50 means the model answers using generic terms and drops 50% of the specific medical/Egyptian Arabic vocabulary expected (e.g., "عطش", "مايه", "زغللة").
-- **Punctuation Score (10%):** Evaluates if the response is formatted well for Text-to-Speech (TTS). It checks for sentence termination (ends with `. ! ?`), comma density (at least 1 comma per 120 chars), and heavily penalises run-on sentences over 120 chars without pauses.
+- **Judge Score (45%):** A weighted combination. **Factual Correctness (45%)** strictly checks for medical accuracy and penalises hallucinations. **Relevance (30%)** ensures the user's specific context (e.g., pricing, reservations, illnesses) is directly addressed. **Completeness (25%)** verifies if all core expected information is presented. A Judge score of 0.60 means the raw average is ~3/5; the model answers but lacks depth or misses facts.
+- **Keyword Rate (20%):** A deterministic check. A rate of 0.50 means the model answers using generic terms and drops 50% of the specific medical/Egyptian Arabic vocabulary expected (e.g., "عطش", "مايه", "زغللة").
+- **Syntax match (20%):** Enforces syntactic similarity between the AI's exact wording and the ground truth.
+- **Punctuation Score (5%):** Evaluates if the response is formatted well for Text-to-Speech (TTS). It checks for sentence termination (ends with `. ! ?`), comma density (at least 1 comma per 120 chars), and heavily penalises run-on sentences over 120 chars without pauses.
 """)
         st.markdown("**💡 How to improve:**")
         tips = []
         if r.get("avg_keyword_rate", 1) < 0.70:
             tips.append("🔴 **Keyword rate < 70%** — your Weaviate index is missing key medical PDFs. Upload more domain-specific Arabic documents.")
+        if r.get("avg_syntax_score", 1) < 0.50:
+            tips.append("🟡 **Syntax match < 50%** — the model's wording diverges heavily from expectations. Use few-shot prompts to enforce response style.")
         if r.get("avg_punctuation_score", 1) < 0.60:
             tips.append("🟡 **Punctuation < 60%** — add to your system prompt: *\"استخدم الفاصلة العربية، بين الجمل وأنهِ كل إجابة بنقطة.\"*")
         js = r.get("avg_judge_score", 1)
@@ -237,6 +244,8 @@ Arabic has rich morphology so even a 20% WER can feel acceptable in conversation
                 )
                 st.caption(
                     f"KW: {d.get('keyword_rate',0):.0%} | "
+                    f"Syntax: {d.get('syntax_score',0):.0%} | "
+                    f"Ammya: {d.get('ammya_score',0):.2f} | "
                     f"Punct: {d.get('punctuation_score',0):.2f} | "
                     f"Preview: {d.get('actual_preview','')[:150]}"
                 )
@@ -363,6 +372,25 @@ Arabic has rich morphology so even a 20% WER can feel acceptable in conversation
     else:
         st.json(r)
 
+    # ── TTS+ASR ───────────────────────────────────────────────────────────────
+    if comp == "tts_asr":
+        st.subheader("🔄 TTS+ASR — End-to-End Speech Pipeline")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Overall score", f"{score:.3f}")
+        c2.metric("Mean WER",  f"{r.get('avg_wer',0):.1%}")
+        c3.metric("Mean CER",  f"{r.get('avg_cer',0):.1%}")
+        c4.metric("Success rate", f"{r.get('success_rate',0):.0%}")
+
+        st.markdown("---")
+        with st.expander("📋 Per-sample details"):
+            for d in r.get("details", []):
+                st.markdown(f"**WER `{d.get('wer',0):.1%}` | CER `{d.get('cer',0):.1%}` | TTS `{d.get('latency_tts_ms',0):.0f}ms` | ASR `{d.get('latency_asr_ms',0):.0f}ms`**")
+                cols2 = st.columns(2)
+                cols2[0].caption(f"📝 Reference: {d.get('reference','')}")
+                cols2[1].caption(f"🤖 Hypothesis: {d.get('hypothesis','')}")
+                st.divider()
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -414,6 +442,7 @@ with st.sidebar:
         th_llm  = st.number_input("LLM score min",      value=0.70, step=0.01, format="%.2f")
         th_mcp  = st.number_input("MCP score min",      value=0.80, step=0.01, format="%.2f")
         th_rag  = st.number_input("RAG precision min",  value=0.60, step=0.01, format="%.2f")
+        th_tts_asr = st.number_input("TTS+ASR score min",value=0.70, step=0.01, format="%.2f")
         th_comp = st.number_input("Composite pass",     value=0.85, step=0.01, format="%.2f")
 
     st.divider()
@@ -481,6 +510,8 @@ def _run(name: str) -> Dict[str, Any]:
         from evaluation.eval_mcp import run_eval
     elif name == "rag":
         from evaluation.eval_rag import run_eval
+    elif name == "tts_asr":
+        from evaluation.eval_tts_asr import run_eval
     else:
         return {"score": 0.0, "error": f"Unknown: {name}"}
     return run_eval()
@@ -490,13 +521,14 @@ def _run(name: str) -> Dict[str, Any]:
 COMPS = {
     "tts":  ("🔊", "TTS",  "Synthesis quality & latency"),
     "asr":  ("🎙️", "ASR",  "Word error rate & accuracy"),
+    "tts_asr": ("🔄", "TTS+ASR", "End-to-end synthesis & recognition"),
     "llm":  ("🤖", "LLM",  "Answer quality & Arabic fluency"),
     "mcp":  ("📋", "MCP",  "Clinic ops & slot coverage"),
     "rag":  ("📚", "RAG",  "Knowledge retrieval coverage"),
 }
 
 st.markdown("### 🧪 Evaluation Components")
-cols = st.columns(5, gap="medium")
+cols = st.columns(len(COMPS), gap="medium")
 
 for idx, (key, (icon, name, desc)) in enumerate(COMPS.items()):
     with cols[idx]:
@@ -562,7 +594,7 @@ if st.session_state.results:
     st.markdown("## 📊 Full Evaluation Report")
 
     # Composite score
-    _W = {"llm": 0.30, "asr": 0.20, "mcp": 0.20, "rag": 0.20, "tts": 0.05}
+    _W = {"llm": 0.30, "asr": 0.20, "mcp": 0.20, "rag": 0.20, "tts": 0.05, "tts_asr": 0.05}
     _ws = _ss = 0.0
     for _k, _v in st.session_state.results.items():
         _w = _W.get(_k, 0.0); _ss += _w * _v.get("score", 0); _ws += _w
@@ -580,7 +612,7 @@ if st.session_state.results:
     <div style="margin-top:6px;font-size:.8rem;color:#8b949e;">
         Weights: LLM 30% · ASR 20% · MCP 20% · RAG 20% · TTS 5%
     </div>
-</div>
+w</div>
 """, unsafe_allow_html=True)
 
     # Per-component tabs

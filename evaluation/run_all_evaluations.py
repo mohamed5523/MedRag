@@ -68,7 +68,7 @@ logging.basicConfig(
 logger = logging.getLogger("eval.runner")
 
 # ── Component registry ─────────────────────────────────────────────────────────
-COMPONENTS = ["tts", "asr", "llm", "mcp", "rag"]
+COMPONENTS = ["tts", "asr", "llm", "mcp", "rag", "tts_asr"]
 
 
 def _run_component(name: str, provider_url: str | None = None) -> dict:
@@ -87,6 +87,8 @@ def _run_component(name: str, provider_url: str | None = None) -> dict:
             from evaluation.eval_mcp import run_eval
         elif name == "rag":
             from evaluation.eval_rag import run_eval
+        elif name == "tts_asr":
+            from evaluation.eval_tts_asr import run_eval
         else:
             return {"component": name, "error": f"Unknown: {name}", "score": 0.0}
 
@@ -121,6 +123,7 @@ def _threshold_status(results: list) -> dict:
             "rag":       ("rag_precision_min",          r.get("avg_precision", 0.0) >= THRESHOLDS.get("rag_precision_min", 0.60)),
             "tts":       ("tts_latency_p95_ms",         r.get("latency", {}).get("p95", 9999) <= THRESHOLDS.get("tts_latency_p95_ms", 3000)),
             "whatsapp":  ("whatsapp_success_rate_min",  score >= THRESHOLDS.get("whatsapp_success_rate_min", 0.90)),
+            "tts_asr":   ("tts_asr_score_min",          score >= THRESHOLDS.get("tts_asr_score_min", 0.70)),
         }
         if name in checks:
             thr_key, passed = checks[name]

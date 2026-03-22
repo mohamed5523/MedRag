@@ -31,7 +31,7 @@ router = APIRouter()
 
 
 def _get_asr_provider() -> str:
-    """Return the configured ASR provider (elevenlabs or groq)."""
+    """Return the configured ASR provider (groq [default] or elevenlabs [legacy])."""
     return tts_settings.ASR_PROVIDER
 
 
@@ -98,18 +98,21 @@ def _groq_transcribe(audio_data: bytes, filename: str, model: str) -> str:
 @router.post("/transcribe")
 async def transcribe_audio(
     audio_file: UploadFile = File(...),
-    model: str = "whisper-large-v3",
+    model: str = None,
     save: bool = False,
     session_id: str | None = None,
 ):
     """
     Transcribe an uploaded audio file.
 
-    Uses ElevenLabs Scribe (default) or Groq Whisper based on ASR_PROVIDER setting.
+    Uses Groq Whisper (default) or ElevenLabs Scribe (legacy) based on ASR_PROVIDER setting.
     Accepts common browser-recorded formats like WebM/Opus and WAV.
     Returns a JSON object with `transcribed_text`.
     """
     provider = _get_asr_provider()
+    # Resolve default model based on provider
+    if model is None:
+        model = tts_settings.GROQ_WHISPER_MODEL if provider == "groq" else tts_settings.ELEVENLABS_ASR_MODEL
 
     try:
         with tracer.start_as_current_span("read_input") as span:
@@ -143,17 +146,18 @@ async def transcribe_audio(
         with tracer.start_as_current_span("asr.transcribe") as span:
             span.set_attribute("provider", provider)
 
-            if provider == "elevenlabs":
-                span.set_attribute("model", tts_settings.ELEVENLABS_ASR_MODEL)
-                logger.info("[ASR] Transcribing with ElevenLabs Scribe (model=%s)", tts_settings.ELEVENLABS_ASR_MODEL)
-                text = await asyncio.to_thread(_elevenlabs_transcribe, data, filename)
-                used_model = tts_settings.ELEVENLABS_ASR_MODEL
-            else:
-                # Groq Whisper fallback
+            if provider == "groq":
+                # Groq Whisper — default
                 span.set_attribute("model", model)
                 logger.info("[ASR] Transcribing with Groq Whisper (model=%s)", model)
                 text = await asyncio.to_thread(_groq_transcribe, data, filename, model)
                 used_model = model
+            else:
+                # ElevenLabs Scribe (legacy)
+                span.set_attribute("model", tts_settings.ELEVENLABS_ASR_MODEL)
+                logger.info("[ASR] Transcribing with ElevenLabs Scribe (model=%s) [legacy]", tts_settings.ELEVENLABS_ASR_MODEL)
+                text = await asyncio.to_thread(_elevenlabs_transcribe, data, filename)
+                used_model = tts_settings.ELEVENLABS_ASR_MODEL
 
         logger.info("[ASR] Transcription result (%s): %s", provider, text[:100] if text else "(empty)")
         return JSONResponse({"transcribed_text": text, "model": used_model})

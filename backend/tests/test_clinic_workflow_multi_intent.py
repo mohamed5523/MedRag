@@ -109,7 +109,7 @@ def test_multi_intent_list_doctors_schedule_and_price_triggers_all():
         entities=Entities(clinic="جراحه", clinic_id=1097, doctor=None, provider_id=None),
         intent="check_availability",
         target_entity_type="clinic",
-        last_user_question="مين دكتور النهارده متاح في عيادة الجراحة و سعر الكشف",
+        last_user_question="عاوز أسماء الدكاترة ومواعيد عيادة الجراحة و سعر الكشف",
         needs_followup=False,
     )
 

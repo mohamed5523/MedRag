@@ -98,19 +98,30 @@ JSON Schema:
    - Do not remove symptoms unless user states they made a mistake.
 
 4. **Target Entity Type Classification**
-   - If text mentions: "دكتور", person name → target = "doctor"
-   - If mentions: "عيادة" → target = "clinic"
-   - If mentions: "مستشفى" → target = "hospital"
-   - If ambiguous → inherit previous target entity type.
+    - If text mentions: "دكتور" + person name (e.g. دكتور أحمد) -> target = "doctor", doctor = "أحمد"
+    - If text mentions: "دكتور" + specialty (e.g. دكتور أطفال، أطباء أسنان، دكتور باطنة) -> target = "clinic", clinic = "أطفال/أسنان/باطنة". Do NOT set the doctor name to the specialty!
+    - "مين دكتور أطفال متاح حاليا" → target = "clinic", clinic = "أطفال", intent = check_availability
+    - "محتاج دكتور باطنة" → target = "clinic", clinic = "باطنة", intent = check_availability
+    - If mentions: "عيادة" -> target = "clinic"
+    - If mentions: "مستشفى" -> target = "hospital"
+    - If ambiguous -> inherit previous target entity type.
 
-5. **Intent Detection Examples**
-   - "سعر الكشف", "سعره", "بكام", "التكلفة", "كم السعر" → ask_price
-   - "احجز", "ميعاد", "حجز", "موعد", "أحجز" → book_appointment
-   - "مين الدكاترة", "أسماء الأطباء", "قائمة", "دكاترة ايه الموجودين" → list_doctors
-   - "مين متاح", "موجود؟", "المواعيد", "مواعيد", "جدول العيادة", "متى", "امتى" → check_availability
-   - "بطني بتوجعني", "عندي ألم" → describe_symptoms
-   - أي سؤال عن مستشفى أو خدماتها العامة → hospital_info
-   - Follow natural language meaning.
+ 5. **Intent Detection Examples (CRITICAL - Arabic Ammya/Colloquial)**
+    - "سعر الكشف", "سعره", "بكام", "التكلفة", "كم السعر" → ask_price
+    - "احجز", "ميعاد", "حجز", "موعد", "أحجز" → book_appointment
+    - "مين الدكاترة", "أسماء الأطباء", "قائمة", "دكاترة ايه الموجودين", "دكاترة اطفال", "مواعيد دكاترة اطفال" → list_doctors
+    - "مين متاح", "موجود؟", "المواعيد", "مواعيد", "جدول العيادة", "متى", "امتى" → check_availability
+    - **Ammya availability queries (CRITICAL):**
+      "مين دكتور أطفال متاح حاليا" → check_availability
+      "مين دكتور عظام متاح النهارده" → check_availability
+      "فين دكتور باطنة" → check_availability
+      "محتاج دكتور أسنان" → check_availability
+      "عايز أروح لدكتور عيون" → check_availability
+      "محتاج أطفال" → check_availability
+      "عايز دكتور جلدية" → check_availability
+    - "بطني بتوجعني", "عندي ألم" → describe_symptoms
+    - أي سؤال عن مستشفى أو خدماتها العامة → hospital_info
+    - Follow natural language meaning. When in doubt, if the user mentions a specialty or "دكتور", use check_availability.
 
 6. **Clinic vs Hospital Distinction**
    - "عيادة" (clinic) + schedules/doctors → target = "clinic" (use MCP tools)

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from opentelemetry import trace
@@ -38,6 +38,43 @@ from app.integrations.mcp_client import (
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.clinic_workflow")
 
+CLINIC_SPECIALTY_WORDS = {
+    "أطفال", "اطفال",
+    "باطنة", "باطنه", "باطنه",
+    "عظام",
+    "عيون",
+    "أسنان", "اسنان",
+    "جلدية", "جلديه",
+    "جراحة", "جراحه",
+    "أعصاب", "اعصاب",
+    "قلب",
+    "صدر",
+    "مسالك",
+    "نسا",
+    "توليد",
+    "أنف", "انف",
+    "أذن", "اذن",
+    "حنجرة", "حنجره",
+    "نفسية", "نفسيه",
+    "سكر",
+    "تجميل",
+    "مخ",
+    "كبد",
+    "كلى",
+    "رمد",
+    "طوارئ",
+    "حضانة", "حضانه",
+    "تخدير",
+    "علاج طبيعي",
+    "مناظير",
+    "أورام", "اورام",
+    "مخ وأعصاب", "مخ واعصاب",
+    "حميات",
+    "أمراض", "امراض",
+    "بولية", "بوليه",
+    "عصبية", "عصبيه",
+    "جلد",
+}
 
 class MCPWorkflowError(Exception):
     """Raised when the clinic workflow cannot be completed."""
@@ -265,29 +302,72 @@ class ClinicWorkflowService:
                     reason="provider_not_found",
                 )
 
-            # Limit concurrency to avoid overwhelming the backend/MCP
-            sem = asyncio.Semaphore(10)
+            # Infer the specific target date from the question (today, tomorrow, etc.)
+            now_dt = datetime.now(timezone(timedelta(hours=2)))
+            target_dt = now_dt
             
-            async def fetch_schedule(p: ProviderRecord) -> Tuple[ProviderRecord, ProviderScheduleResponse]:
-                async with sem:
-                    now_dt = datetime.now()
-                    date_from_str = now_dt.strftime("%d/%m/%Y")
-                    date_to_str = (now_dt + timedelta(days=7)).strftime("%d/%m/%Y")
-                    # Fetch for next 7 days in a single API call
-                    resp = await self._client.get_clinic_provider_schedule(
-                        clinic_id=clinic_id,
-                        provider_id=p.provider_id,
-                        date_from=date_from_str,
-                        date_to=date_to_str,
-                    )
-                    
-                    return p, resp
+            day_id = _infer_target_day_id(question, now_dt=now_dt)
+            # Find the next date that matches the target day_id
+            day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
+            if day_id and day_id in day_id_to_py_weekday:
+                target_py_wd = day_id_to_py_weekday[day_id]
+                days_ahead = (target_py_wd - target_dt.weekday()) % 7
+                target_dt = target_dt + timedelta(days=days_ahead)
+                
+            date_from_str = target_dt.strftime("%d/%m/%Y")
+            date_to_str = target_dt.strftime("%d/%m/%Y")
 
-            results = await asyncio.gather(*(fetch_schedule(p) for p in clinic_providers))
-            
-            # Filter out providers with no slots
-            active_schedules = [(p, sched) for p, sched in results if sched.slots]
-            
+            # IMPORTANT: Fetch ALL provider schedules in ONE clinic-wide call (no providerId filter).
+            # Per-provider calls can silently return empty slots for some doctors even when they
+            # are scheduled, causing them to be excluded. One bulk call returns all at once.
+            bulk_schedule = await self._client.get_clinic_provider_schedule(
+                clinic_id=clinic_id,
+                provider_id=None,  # No filter → returns ALL providers for this clinic
+                date_from=date_from_str,
+                date_to=date_to_str,
+            )
+
+            # Build a lookup from provider_id -> ProviderRecord for name lookups
+            provider_map = {p.provider_id: p for p in clinic_providers if p.provider_id is not None}
+
+            # Group slots by provider_id
+            slots_by_provider: Dict[int, List] = defaultdict(list)
+            for slot in bulk_schedule.slots:
+                if slot.provider_id is not None:
+                    slots_by_provider[slot.provider_id].append(slot)
+
+            # Build active_schedules preserving original ProviderRecord order
+            active_schedules: List[Tuple[ProviderRecord, ProviderScheduleResponse]] = []
+            for p in clinic_providers:
+                if p.provider_id is None:
+                    continue
+                p_slots = slots_by_provider.get(p.provider_id, [])
+                if p_slots:
+                    active_schedules.append((p, ProviderScheduleResponse(slots=p_slots)))
+
+            # Fallback: if bulk call returned no slots at all (backend may still require per-provider
+            # calls), fall back to individual calls.
+            if not active_schedules and not bulk_schedule.slots:
+                logger.warning(
+                    "Bulk clinic schedule returned no slots for clinic_id=%s. "
+                    "Falling back to per-provider calls.",
+                    clinic_id,
+                )
+                sem = asyncio.Semaphore(10)
+
+                async def fetch_schedule(p: ProviderRecord) -> Tuple[ProviderRecord, ProviderScheduleResponse]:
+                    async with sem:
+                        resp = await self._client.get_clinic_provider_schedule(
+                            clinic_id=clinic_id,
+                            provider_id=p.provider_id,
+                            date_from=date_from_str,
+                            date_to=date_to_str,
+                        )
+                        return p, resp
+
+                results = await asyncio.gather(*(fetch_schedule(p) for p in clinic_providers))
+                active_schedules = [(p, sched) for p, sched in results if sched.slots]
+
             if not active_schedules:
                  raise MCPWorkflowError(
                     "مفيش مواعيد متاحة لأي دكتور في العيادة دي دلوقتي.",
@@ -313,7 +393,8 @@ class ClinicWorkflowService:
                     details={
                         "clinic_id": clinic_id,
                         "providers_count": len(clinic_providers),
-                        "active_providers": len(active_schedules)
+                        "active_providers": len(active_schedules),
+                        "bulk_slots_total": len(bulk_schedule.slots),
                     },
                 )
             )
@@ -321,13 +402,22 @@ class ClinicWorkflowService:
 
         # For specific provider availability queries, call the schedule tool for a date range
         # and aggregate all returned slots into a single unified schedule view.
-        all_slots: List[ScheduleSlot] = []
-
-        now_dt = datetime.now()
-        date_from_str = now_dt.strftime("%d/%m/%Y")
-        date_to_str = (now_dt + timedelta(days=7)).strftime("%d/%m/%Y")
+        # Infer the target date from the question
+        now_dt = datetime.now(timezone(timedelta(hours=2)))
+        target_dt = now_dt
+        day_id = _infer_target_day_id(question, now_dt=now_dt)
+        day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
+        if day_id and day_id in day_id_to_py_weekday:
+            target_py_wd = day_id_to_py_weekday[day_id]
+            days_ahead = (target_py_wd - target_dt.weekday()) % 7
+            target_dt = target_dt + timedelta(days=days_ahead)
+            
+        date_from_str = target_dt.strftime("%d/%m/%Y")
+        date_to_str = target_dt.strftime("%d/%m/%Y")
         
-        # Execute request
+        all_slots: List[ScheduleSlot] = []
+        
+        # Execute request for that exact day
         day_response = await self._client.get_clinic_provider_schedule(
             clinic_id=clinic_id,
             provider_id=provider_id,
@@ -443,61 +533,102 @@ class ClinicWorkflowService:
                 reason="provider_not_found",
             )
 
-        sem = asyncio.Semaphore(max_concurrency)
+        # IMPORTANT: Fetch ALL provider schedules in ONE clinic-wide call (no providerId filter).
+        # Per-provider calls can silently return empty slots for some doctors even when they
+        # are scheduled, causing them to be excluded from the response.
+        target_dt_base = now_dt or datetime.now(timezone(timedelta(hours=2)))
+        day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
+        if day_id and day_id in day_id_to_py_weekday:
+            target_py_wd = day_id_to_py_weekday[day_id]
+            days_ahead = (target_py_wd - target_dt_base.weekday()) % 7
+            target_dt_base = target_dt_base + timedelta(days=days_ahead)
 
-        async def fetch_for_provider(p: ProviderRecord) -> tuple[ProviderRecord, ProviderScheduleResponse]:
-            async with sem:
-                # _infer_target_day_id now returns a specific date if we want a robust backend,
-                # but currently it returns `day_id`. If `day_id` is passed we map it to dateFrom/dateTo
-                # representing that date. For now, we will query for the next 7 days and let the formatter
-                # handle filtering by day_id, or we query just 1 day if we can infer the date.
-                # Assuming `day_id` is just a weekday (1..7). It's best to compute the target date:
-                target_dt = now_dt or datetime.now()
-                # Find the next date that matches the target day_id (1=Sat, ..., 7=Fri).
-                # Python weekday: 0=Mon, ..., 6=Sun.
-                # Map our 1..7 to Python: Sat=1->5, Sun=2->6, Mon=3->0, Tue=4->1, Wed=5->2, Thu=6->3, Fri=7->4
-                day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
-                if day_id and day_id in day_id_to_py_weekday:
-                    target_py_wd = day_id_to_py_weekday[day_id]
-                    days_ahead = (target_py_wd - target_dt.weekday()) % 7
-                    target_dt = target_dt + timedelta(days=days_ahead)
-                
-                target_date_str = target_dt.strftime("%d/%m/%Y")
+        target_date_str = target_dt_base.strftime("%d/%m/%Y")
 
-                resp = await self._client.get_clinic_provider_schedule(
-                    clinic_id=clinic_id,
-                    provider_id=p.provider_id,
-                    date_from=target_date_str,
-                    date_to=target_date_str,
-                )
-                audit.append(
-                    ToolAuditEntry(
-                        name="get_clinic_provider_schedule",
-                        status="success",
-                        details={
-                            "clinic_id": clinic_id,
-                            "provider_id": p.provider_id,
-                            "date_from": target_date_str,
-                            "date_to": target_date_str,
-                            "slots": len(resp.slots),
-                        },
-                    )
-                )
-                return p, resp
+        bulk_schedule = await self._client.get_clinic_provider_schedule(
+            clinic_id=clinic_id,
+            provider_id=None,  # No filter → returns ALL providers for this clinic
+            date_from=target_date_str,
+            date_to=target_date_str,
+        )
 
-        results = await asyncio.gather(*(fetch_for_provider(p) for p in providers))
+        # Group bulk slots by provider_id
+        slots_by_provider: Dict[int, List[ScheduleSlot]] = defaultdict(list)
+        for slot in bulk_schedule.slots:
+            if slot.provider_id is not None:
+                slots_by_provider[slot.provider_id].append(slot)
 
+        # Build present list from bulk data, preserving doctor name from provider list
+        provider_map = {p.provider_id: p for p in providers if p.provider_id is not None}
         present: list[tuple[str, list[str]]] = []
-        for p, resp in results:
-            if not resp.slots:
-                continue
-            name = p.provider_name_ar or p.provider_name_en or "دكتور"
+        for pid, p_slots in slots_by_provider.items():
+            p = provider_map.get(pid)
+            name = (p.provider_name_ar or p.provider_name_en if p else None) or f"دكتور (ID:{pid})"
             times = []
-            for slot in resp.slots:
+            for slot in p_slots:
                 start = slot.shift_start or "غير محدد"
                 end = slot.shift_end or "غير محدد"
                 times.append(f"{start} → {end}")
             present.append((name, times))
+
+        # Fallback: if bulk returned no slots, fall back to per-provider calls
+        if not present and not bulk_schedule.slots:
+            logger.warning(
+                "Bulk clinic schedule returned no slots for who_is_present (clinic_id=%s). "
+                "Falling back to per-provider calls.",
+                clinic_id,
+            )
+            sem = asyncio.Semaphore(max_concurrency)
+
+            async def fetch_for_provider(p: ProviderRecord) -> tuple[ProviderRecord, ProviderScheduleResponse]:
+                async with sem:
+                    resp = await self._client.get_clinic_provider_schedule(
+                        clinic_id=clinic_id,
+                        provider_id=p.provider_id,
+                        date_from=target_date_str,
+                        date_to=target_date_str,
+                    )
+                    audit.append(
+                        ToolAuditEntry(
+                            name="get_clinic_provider_schedule",
+                            status="success",
+                            details={
+                                "clinic_id": clinic_id,
+                                "provider_id": p.provider_id,
+                                "date_from": target_date_str,
+                                "date_to": target_date_str,
+                                "slots": len(resp.slots),
+                            },
+                        )
+                    )
+                    return p, resp
+
+            fallback_results = await asyncio.gather(*(fetch_for_provider(p) for p in providers))
+            for p, resp in fallback_results:
+                if not resp.slots:
+                    continue
+                name = p.provider_name_ar or p.provider_name_en or "دكتور"
+                times = []
+                for slot in resp.slots:
+                    start = slot.shift_start or "غير محدد"
+                    end = slot.shift_end or "غير محدد"
+                    times.append(f"{start} → {end}")
+                present.append((name, times))
+
+        audit.append(
+            ToolAuditEntry(
+                name="get_clinic_provider_schedule",
+                status="success",
+                details={
+                    "clinic_id": clinic_id,
+                    "provider_id": None,
+                    "date_from": target_date_str,
+                    "date_to": target_date_str,
+                    "slots": len(bulk_schedule.slots),
+                    "providers_with_slots": len(present),
+                },
+            )
+        )
 
         if not present:
             raise MCPWorkflowError(
@@ -920,6 +1051,8 @@ def _is_plausible_doctor_name(candidate: str) -> bool:
     Guard against false positives like:
       - "مين دكتور النهارده متاح..." (not a name)
       - "دكتور مواعيد ..." (not a name)
+      - "دكتور أطفال" (specialty, not a name)
+      - "دكتور أطفال حالياً" (availability query about specialty)
     """
     if not candidate:
         return False
@@ -964,6 +1097,18 @@ def _is_plausible_doctor_name(candidate: str) -> bool:
     # Reject if all tokens are non-name words (e.g., "النهارده متاح")
     if all(t.casefold() in non_name_prefixes for t in tokens):
         return False
+
+    # Specialty / clinic words: when "دكتور" is followed by one of these,
+    # the user is asking about a clinic/specialty, NOT a specific doctor.
+    # e.g. "دكتور أطفال حالياً" → specialty query, not a doctor named "أطفال".
+
+    # Reject if the first token is a specialty word (the user said "دكتور أطفال ...")
+    if tokens[0].casefold() in CLINIC_SPECIALTY_WORDS:
+        return False
+
+    # Also reject if removing non-name trailing words leaves only specialty words
+    # e.g. "أطفال حالياً" → first token "أطفال" is specialty → already caught above
+    # e.g. "أطفال متاح النهارده" → first token is specialty → caught above
 
     # Require at least 2 tokens OR a token that is reasonably name-like (Arabic letters).
     # This reduces chance of "النهارده" being treated as a name.
@@ -1055,7 +1200,16 @@ def _detect_requested_intents(question: str, *, primary_intent: str, max_intents
 
 def _is_who_is_present_query(question: str) -> bool:
     q = (question or "").casefold()
-    return bool(re.search(r"مين\s+(?:اللي|اللى)?\s*(?:موجود(?:ين)?|متاح)", q))
+    # Original strict pattern: مين + directly + موجود/متاح
+    if re.search(r"مين\s+(?:اللي|اللى)?\s*(?:موجود(?:ين)?|متاح)", q):
+        return True
+    # Broader Ammya pattern: "مين دكتور X متاح" / "مين دكتور X موجود حاليا"
+    if re.search(r"مين\s+(?:دكتور|دكتوره?)\s+\S+.*?(?:متاح|موجود)", q):
+        return True
+    # "محتاج دكتور X حالياً" / "عايز دكتور X"
+    if re.search(r"(?:محتاج|عايز|عاوز)\s+(?:دكتور|دكتوره?)\s+\S+", q):
+        return True
+    return False
 
 
 _AR_WEEKDAY_TO_EN = {
@@ -1089,7 +1243,7 @@ def _infer_target_day_id(question: str, *, now_dt: datetime | None) -> int:
     """
     q = (question or "").casefold()
 
-    base_dt = now_dt or datetime.now()
+    base_dt = now_dt or datetime.now(timezone(timedelta(hours=2)))
 
     if any(tok in q for tok in ["بكره", "بكرة", "غدا", "غداً"]):
         target = base_dt + timedelta(days=1)
@@ -1111,18 +1265,58 @@ def _filter_provider_list_by_clinic_id(provider_list: ProviderListPayload, clini
     return ProviderListPayload(providers=filtered)
 
 
+def _time_str_to_minutes(t: str) -> int:
+    """Convert a time string like '9:00 صباحًا', '1:00 مساءً', '13:00' to total minutes for sorting."""
+    if not t:
+        return 9999
+    # Detect PM markers (Arabic or English)
+    is_pm = any(m in t for m in ["مساء", "مساءً", "PM", "pm", "م"])
+    is_am = any(m in t for m in ["صباح", "صباحًا", "AM", "am", "ص"])
+    # Extract HH:MM
+    import re as _re
+    m = _re.search(r"(\d{1,2}):(\d{2})", t)
+    if not m:
+        return 9999
+    h, mn = int(m.group(1)), int(m.group(2))
+    # If 24h format (h >= 13), no AM/PM logic needed
+    if h >= 13:
+        return h * 60 + mn
+    # 12h format
+    if is_pm and h != 12:
+        h += 12
+    elif is_am and h == 12:
+        h = 0
+    return h * 60 + mn
+
+
 def _format_who_is_present(*, clinic_label: str, day_id: int, present: list[tuple[str, list[str]]]) -> str:
+    """Format a sorted, one-doctor-per-block context for who is present."""
+    # Sort by start time of first slot (earliest first)
+    def _sort_key(entry: tuple[str, list[str]]) -> int:
+        times = entry[1]
+        if not times:
+            return 9999
+        # times are strings like "9:00 صباحًا → 11:00 صباحًا"
+        first = times[0].split("→")[0].strip()
+        return _time_str_to_minutes(first)
+
+    sorted_present = sorted(present, key=_sort_key)
+
     lines = [
-        "قائمة الموجودين حسب بيانات السيستم.",
-        f"العيادة: {clinic_label}.",
-        f"اليوم (day_id): {day_id}.",
-        "\nالموجودين:",
+        f"قائمة الدكاترة الموجودين في عيادة {clinic_label} حسب بيانات السيستم (مرتبة حسب الوقت):",
+        "",
     ]
-    for name, times in present:
-        if times:
-            lines.append(f"- {name}: " + "، ".join(times))
-        else:
-            lines.append(f"- {name}")
+    for name, times in sorted_present:
+        lines.append(f"دكتور {name}")
+        if len(times) > 1:
+            for i, t in enumerate(times, 1):
+                start_end = t.replace(" → ", " لحد ")
+                label = "الفترة الأولى" if i == 1 else f"الفترة {'التانية' if i == 2 else 'ال' + str(i)}"
+                lines.append(f"- {label}: من {start_end}")
+        elif times:
+            start_end = times[0].replace(" → ", " لحد ")
+            lines.append(f"- من {start_end}")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -1137,6 +1331,22 @@ def _infer_clinic_from_context(state: ConversationState, question_text: str) -> 
             if normalized.startswith("عيادة"):
                 return normalized
             return f"عيادة {normalized}".strip()
+
+    q = (question_text or "").casefold()
+    
+    # 1. Match "دكتور <specialty>" (e.g., "مين دكتور أطفال متاح")
+    m1 = re.search(r"(?:دكتور|دكتوره?|دكتورة)\s+([\u0621-\u064A]+)", q)
+    if m1:
+        possible_specialty = m1.group(1)
+        if possible_specialty in CLINIC_SPECIALTY_WORDS:
+            return f"عيادة {possible_specialty}"
+            
+    # 2. Match "محتاج/عايز/فين <specialty>" (e.g., "محتاج أسنان")
+    m2 = re.search(r"(?:محتاج|عايز|عاوز|فين)\s+([\u0621-\u064A]+)", q)
+    if m2:
+        possible_specialty = m2.group(1)
+        if possible_specialty in CLINIC_SPECIALTY_WORDS:
+            return f"عيادة {possible_specialty}"
 
     inferred = _infer_phrase_after_keywords(
         question_text,
@@ -1336,11 +1546,12 @@ def _format_multi_provider_schedule(
     clinic_name: str,
     schedules: List[Tuple[ProviderRecord, ProviderScheduleResponse]],
 ) -> str:
-    lines = [f"جبتلك مواعيد دكاترة {clinic_name} المتاحين من النظام."]
-    
+    """Format all providers' schedules sorted by earliest slot start time, one block per doctor."""
+
     def _normalize_ampm_for_ar(value: str) -> str:
         """Prefer صباحًا/مساءً over ص/م or AM/PM."""
-        if not value: return value
+        if not value:
+            return value
         out = value
         out = re.sub(r"(?i)\bA\.?M\.?\b", "صباحًا", out)
         out = re.sub(r"(?i)\bP\.?M\.?\b", "مساءً", out)
@@ -1348,19 +1559,46 @@ def _format_multi_provider_schedule(
         out = re.sub(r"(\d{1,2}[:.]\d{2})\s*م\b", r"\1 مساءً", out)
         return out
 
+    # Pre-process: build (provider, grouped_slots_by_day) and compute earliest start
+    processed: List[Tuple[ProviderRecord, Dict[str, List[str]], int]] = []
     for provider, response in schedules:
-        doctor_name = provider.provider_name_ar or provider.provider_name_en or "دكتور"
-        lines.append(f"\nدكتور: {doctor_name}")
-        
         grouped: Dict[str, List[str]] = defaultdict(list)
+        earliest = 9999
         for slot in response.slots:
             day = slot.day_name or f"اليوم #{slot.day_id}"
-            start = _normalize_ampm_for_ar(slot.shift_start or "")
-            end = _normalize_ampm_for_ar(slot.shift_end or "")
+            start_raw = slot.shift_start or ""
+            end_raw = slot.shift_end or ""
+            start = _normalize_ampm_for_ar(start_raw)
+            end = _normalize_ampm_for_ar(end_raw)
             if start and end:
-                grouped[day].append(f"{start} → {end}")
-        
-        for day, times in grouped.items():
-            lines.append(f"- {day}: " + "، ".join(times))
-            
+                grouped[day].append((start, end))
+                slot_minutes = _time_str_to_minutes(start_raw or start)
+                if slot_minutes < earliest:
+                    earliest = slot_minutes
+        processed.append((provider, grouped, earliest))
+
+    # Sort by earliest shift start time
+    processed.sort(key=lambda x: x[2])
+
+    lines = [f"مواعيد دكاترة {clinic_name} المتاحين من النظام (مرتبة حسب الوقت):", ""]
+
+    for provider, grouped, _ in processed:
+        doctor_name = provider.provider_name_ar or provider.provider_name_en or "دكتور"
+        lines.append(f"دكتور {doctor_name}")
+
+        # Collect all slots across all days for this provider
+        all_slots: List[Tuple[str, str]] = []
+        for day, slot_pairs in grouped.items():
+            for start, end in slot_pairs:
+                all_slots.append((start, end))
+
+        if len(all_slots) == 1:
+            start, end = all_slots[0]
+            lines.append(f"- من {start} لحد {end}")
+        elif len(all_slots) > 1:
+            for i, (start, end) in enumerate(all_slots, 1):
+                label = "الفترة الأولى" if i == 1 else f"الفترة {'التانية' if i == 2 else 'ال' + str(i)}"
+                lines.append(f"- {label}: من {start} لحد {end}")
+        lines.append("")
+
     return "\n".join(lines)

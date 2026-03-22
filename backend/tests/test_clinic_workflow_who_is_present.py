@@ -121,9 +121,9 @@ def test_who_is_present_today_joins_provider_list_with_schedule_for_single_day_o
     assert res.qa_response["answer"] == "ok-who"
     # Must include a dedicated presence context (not just schedule alone)
     assert "mcp.who_is_present" in res.qa_response["sources"]
-    # Ensure we did not fetch all 7 days; one call per provider for the requested day only.
+    # Ensure we did not fetch all 7 days; one call per provider for the requested day only, plus initial bulk fetch.
     schedule_calls = [c for c in client.calls if c[0] == "get_clinic_provider_schedule"]
-    assert len(schedule_calls) == 2
+    assert len(schedule_calls) == 3
 
 
 def test_who_is_present_tomorrow_uses_tomorrow_day_id():

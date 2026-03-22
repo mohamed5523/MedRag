@@ -23,6 +23,7 @@ type Tab = typeof TABS[number];
 const COMPONENT_COLORS: Record<string, string> = {
     tts: "#6366f1", asr: "#8b5cf6", llm: "#a78bfa",
     mcp: "#34d399", rag: "#10b981", whatsapp: "#f59e0b",
+    tts_asr: "#ec4899",
 };
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
@@ -391,7 +392,7 @@ function RunControls({ onRun, running }: { onRun: (component: string) => void; r
                 onChange={e => setComponent(e.target.value)}
                 className="bg-slate-800 border border-slate-700 text-slate-300 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
             >
-                {["all", "tts", "asr", "llm", "mcp", "rag", "whatsapp"].map(c => (
+                {["all", "tts", "asr", "llm", "mcp", "rag", "whatsapp", "tts_asr"].map(c => (
                     <option key={c} value={c}>{c}</option>
                 ))}
             </select>

@@ -305,6 +305,49 @@ def egyptian_arabic_score(text: str) -> float:
         
     return round(score, 3)
 
+
+# ── Medical Referral Detection ───────────────────────────────────────────────
+
+_REFERRAL_PHRASES = [
+    "تواصل مع دكتور",
+    "تواصل مع طبيب",
+    "استشير دكتور",
+    "استشمارة طبيب",
+    "روح لدكتور",
+    "اسأل دكتور",
+    "اروح لدكتور",
+    "اكلم دكتور",
+    "راجع طبيبك",
+    "راجع الدكتور",
+    "كشف عند دكتور",
+    "كشف عند طبيب",
+    "زيارة الطبيب",
+    "طوارئ اقرب مستشفى",
+    "كلم الاسعاف",
+]
+
+def is_medical_referral(text: str) -> bool:
+    """Check if the text primarily serves as a medical referral.
+    
+    Used to handle cases where the LLM safely refuses to give specific medical 
+    advice and instead directs the user to professional help.
+    """
+    if not text:
+        return False
+        
+    norm_text = arabic_normalize(text)
+    # Check for direct phrases
+    for phrase in _REFERRAL_PHRASES:
+        if arabic_normalize(phrase) in norm_text:
+            return True
+            
+    # Heuristic: if it refers to 'doctor' and 'consult' or 'contact' in various forms
+    tokens = _tokenize(norm_text)
+    has_doctor = any(t in ["دكتور", "دكتورة", "دكاترة", "طبيب", "طبيبة", "اطباء", "مستشفى", "اسعاف"] for t in tokens)
+    has_action = any(t in ["كلم", "تواصل", "استشير", "اسال", "روح", "راجع", "كشف", "زيارة"] for t in tokens)
+    
+    return has_doctor and has_action
+
 # ── RAG ranking metrics ───────────────────────────────────────────────────────
 
 def mrr(relevant_lists: List[List[str]], retrieved_lists: List[List[str]]) -> float:

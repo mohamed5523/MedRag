@@ -548,7 +548,7 @@ const PatientDashboard = () => {
                         ? 'bg-primary text-white'
                         : 'bg-muted text-foreground'
                         }`}>
-                        <p className="text-sm">{message.text}</p>
+                        <p className="text-sm whitespace-pre-wrap">{message.text}</p>
                       </div>
                       <div className="flex items-center gap-2 mt-1">
                         <p className="text-xs text-muted-foreground">

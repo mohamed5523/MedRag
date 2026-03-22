@@ -162,7 +162,7 @@ const VoiceInterface = () => {
                 </div>
               )}
               {currentMessage && (
-                <p className="text-sm text-muted-foreground italic px-4">
+                <p className="text-sm text-muted-foreground italic px-4 whitespace-pre-wrap">
                   "{currentMessage}"
                 </p>
               )}

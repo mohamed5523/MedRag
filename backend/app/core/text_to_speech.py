@@ -3,12 +3,17 @@ import logging
 import os
 from typing import Optional
 
-from elevenlabs import ElevenLabs
 from openai import AsyncOpenAI
 from opentelemetry import trace
 
 from .tts_exceptions import TextToSpeechError
 from .tts_settings import tts_settings
+
+# ElevenLabs is optional (legacy provider — kept for backward compatibility)
+try:
+    from elevenlabs import ElevenLabs as _ElevenLabs
+except Exception:  # pragma: no cover
+    _ElevenLabs = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.tts")
@@ -21,12 +26,12 @@ except Exception as _e:
 
 
 class TextToSpeech:
-    """Text-to-speech supporting OpenAI TTS (default), Azure Neural TTS, and ElevenLabs."""
+    """Text-to-speech supporting OpenAI GPT TTS (default), Azure Neural TTS, and ElevenLabs (legacy)."""
 
     def __init__(self):
         self.provider: str = (tts_settings.TTS_PROVIDER or "openai").lower()
         self._validate_env_vars()
-        self._client: Optional[ElevenLabs] = None  # for ElevenLabs only
+        self._client = None  # ElevenLabs client (legacy), created lazily
         self.openai_client: Optional[AsyncOpenAI] = (
             AsyncOpenAI(api_key=tts_settings.OPENAI_API_KEY)
             if self.provider == "openai"
@@ -53,19 +58,23 @@ class TextToSpeech:
             if missing:
                 raise ValueError(f"Missing required environment variables for Azure TTS: {', '.join(missing)}")
         elif self.provider == "elevenlabs":
+            if _ElevenLabs is None:
+                raise ValueError("elevenlabs SDK is not installed. Install it or switch TTS_PROVIDER to 'openai'.")
             missing = [v for v in ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"] if not os.getenv(v)]
             if missing:
-                raise ValueError(f"Missing required environment variables for ElevenLabs: {', '.join(missing)}")
+                raise ValueError(f"Missing required environment variables for ElevenLabs (legacy): {', '.join(missing)}")
         else:
-            raise ValueError("TTS_PROVIDER must be 'openai', 'azure' or 'elevenlabs'")
+            raise ValueError("TTS_PROVIDER must be 'openai', 'azure', or 'elevenlabs' (legacy)")
 
     @property
-    def client(self) -> Optional[ElevenLabs]:
-        """Get or create ElevenLabs client instance when provider is elevenlabs."""
+    def client(self):
+        """Get or create ElevenLabs client instance when provider is elevenlabs (legacy)."""
         if self.provider != "elevenlabs":
             return None
         if self._client is None:
-            self._client = ElevenLabs(api_key=tts_settings.ELEVENLABS_API_KEY)
+            if _ElevenLabs is None:
+                raise TextToSpeechError("elevenlabs SDK is not installed")
+            self._client = _ElevenLabs(api_key=tts_settings.ELEVENLABS_API_KEY)
         return self._client
 
     async def synthesize(self, text: str, voice_id: Optional[str] = None, provider: Optional[str] = None) -> bytes:
@@ -195,33 +204,40 @@ class TextToSpeech:
 
     async def _openai_synthesize(self, text: str, voice_name: str) -> bytes:
         """Call OpenAI TTS (gpt-4o-mini-tts) using the official Python SDK."""
-        # Normalize text first (MSA -> Egyptian)
+        # Normalize text first (MSA → Egyptian dialect)
         from .tts_normalization import normalize_arabic_for_tts
         normalized_text = normalize_arabic_for_tts(text)
         logger.info(f"[OpenAI TTS] Normalized text: {normalized_text}")
 
+        # Pronunciation & style guidance for Egyptian dialect TTS
         instructions = (
-            "You are a helpful assistant that speaks in Urban Egyptian Arabic dialect (Masri). Use natural colloquial grammar and vocabulary, "
-            "avoiding Modern Standard Arabic or other regional dialects. Use polite, professional Masri (friendly and respectful, not slang-heavy) with a warm, empathetic tone. "
-            "Specifically, pronounce 'Jeem' as a hard 'G' (as in 'goat') and 'Qaf' as a glottal stop (Hamza), except in established formal names. "
-            "Read years as natural numbers (e.g., 2024 is 'alfayn arba'a we 'ishreen', not formal MSA). "
-            "Use Egyptian month names (e.g., Yanayer, Febrayer, Marays, April, Mayo, Yunyu, Yulyu, Aghostos, September, October, November, December). Read dates simply (e.g., 'واحد مايو' as 'wahed mayo')."
-            "Use the 12-hour clock with colloquial markers. Use 'we rob'' (and a quarter), 'we telt' (and a third/twenty past), 'noss' (half past), and 'illa' (to/minus). Add 'es-sobh' (morning) or 'be-leil' (night) instead of AM/PM. "
-            "Use Egyptian pronunciations (e.g., 'Etneen' not 'Ithnayn', 'Talata' not 'Thalatha', 'Tamanya' not 'Thamaniya'). "
-            "If a word is in another language, pronounce it naturally as a fluent Egyptian speaker would. "
-            "Maintain a calm, unhurried pace. When offering reassurance, soften your delivery and slow slightly to convey care and trust. "
-            "Always sound approachable, confident, and eager to help."
+            "أنت مساعد طبي مصري يتكلم بالعامية المصرية الحضرية (المصري). "
+            "اتكلم بطريقة طبيعية وعادية زي أي مصري بيتكلم مع حد قريب منه. "
+            "النقاط المهمة للنطق:\n"
+            "- الجيم: انطقها جيم مصرية صلبة زي حرف G في كلمة 'go' — مش جيم هشة.\n"
+            "- القاف: انطقها زي الهمزة (وقفة في الحلق) في الكلام العادي المصري.\n"
+            "- الأسماء الشخصية: انطق أسماء الدكاترة والأشخاص بنطقها الطبيعي المعتاد وبكل وضوح، ولا تغير حروفها.\n"
+            "- الأرقام: اقراها بالطريقة المصرية — 'اتنين' مش 'اثنان'، 'تلاتة' مش 'ثلاثة'.\n"
+            "- التاريخ والوقت: اقراهم بالطريقة المصرية — 'واحدة و نص' مش 'الساعة الواحدة والنصف'.\n"
+            "- العملة: 'جنيه' بنطق مصري طبيعي.\n"
+            "- إذا في كلمة أجنبية: انطقها زي ما المصريين بينطقوها.\n"
+            "الأسلوب: هادي، ودود، مريح، بيحس بالإنسان. لما بتتكلم عن موضوع طبي، "
+            "بطِّى شوية وخلي نبرتك حنينة وواثقة. دايما اتكلم بثقة وحماس للمساعدة."
         )
 
         try:
-            response = await self.openai_client.audio.speech.create(
-                model=tts_settings.OPENAI_TTS_MODEL,  # e.g. "gpt-4o-mini-tts" or "tts-1"
+            # Use instructions param for gpt-4o-mini-tts (supports it); falls back
+            # gracefully for older models like tts-1 / tts-1-hd.
+            create_kwargs = dict(
+                model=tts_settings.OPENAI_TTS_MODEL,
                 voice=voice_name or tts_settings.OPENAI_TTS_VOICE,
                 input=normalized_text,
-                response_format=tts_settings.OPENAI_TTS_AUDIO_FORMAT,  # e.g. "mp3" or "wav"
-                # instructions=instructions, # OpenAI TTS API doesn't support system instructions yet, prompt via input is needed if model supports it, but currently standard TTS models take 'input' as text to read.
-                # However, normalization helps significantly.
+                response_format=tts_settings.OPENAI_TTS_AUDIO_FORMAT,
             )
+            if tts_settings.OPENAI_TTS_MODEL and "mini-tts" in tts_settings.OPENAI_TTS_MODEL:
+                create_kwargs["instructions"] = instructions
+
+            response = await self.openai_client.audio.speech.create(**create_kwargs)
             audio_bytes = await response.aread()
             return audio_bytes
 

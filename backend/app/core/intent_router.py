@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from enum import Enum
 from typing import Any, List, Optional
 
@@ -295,6 +296,30 @@ def get_router() -> LLMRouter:
     return _router_instance
 
 
+def _is_ammya_clinic_query(text: str) -> bool:
+    """Detect common Egyptian Ammya patterns that indicate a clinic/doctor query.
+
+    These patterns are missed when the state manager doesn't extract the correct
+    intent from colloquial Arabic input.
+    """
+    q = (text or "").casefold()
+    patterns = [
+        # "مين دكتور X متاح/موجود" — who is doctor X available (with optional feminine marker)
+        r"مين\s+(?:دكتور|دكتوره?|دكتورة)\s+\S+.*?(?:متاح|موجود)[ةه]?",
+        # "محتاج/عايز/عاوز دكتور X" — I need doctor X
+        r"(?:محتاج|عايز|عاوز)\s+(?:دكتور|دكتوره?|دكتورة)\s+\S+",
+        # "فين دكتور X" — where is doctor X
+        r"فين\s+(?:دكتور|دكتوره?|دكتورة)\s+\S+",
+        # "دكتور X متاح/موجود" — doctor X available
+        r"(?:دكتور|دكتوره?|دكتورة)\s+\S+\s+(?:متاح|موجود)[ةه]?",
+        # "محتاج أطفال/باطنة/عظام" — I need (specialty)
+        r"(?:محتاج|عايز|عاوز|فين)\s+(?:أطفال|اطفال|باطنة|باطنه|عظام|أسنان|اسنان|عيون|جلدية|جلديه|جراحة|جراحه|أعصاب|اعصاب|قلب|صدر|مسالك|نسا|توليد|مخ|كبد|كلى|رمد)",
+        # "مواعيد دكاترة X" — schedules of X doctors
+        r"مواعيد\s+(?:دكاتر[ةه]|أطباء|اطباء)\s+\S+",
+    ]
+    return any(re.search(p, q) for p in patterns)
+
+
 def route_conversation(
     state: ConversationState, 
     user_query: Optional[str] = None
@@ -334,6 +359,28 @@ def route_conversation(
                 reasoning="النية مستخرجة كاستعلام عيادات - الحفاظ على MCP",
             )
             span.set_attribute("routing.decision_source", "guard.mcp_intent")
+        elif _is_ammya_clinic_query(user_query):
+            # Rule-based safety net for common Ammya patterns the state
+            # manager might miss (e.g. "مين دكتور أطفال متاح حاليا")
+            inferred_intent = (
+                state.intent if state.intent in MCP_INTENTS else "check_availability"
+            )
+            llm_decision = LLMRoutingDecision(
+                mode=RouteMode.MCP,
+                intent=inferred_intent,
+                confidence=0.9,
+                reasoning="كلام عامّي عن دكتور/عيادة - توجيه MCP",
+            )
+            span.set_attribute("routing.decision_source", "guard.ammya_pattern")
+        elif state.entities.clinic or state.target_entity_type == "clinic":
+            # Clinic mentioned in state → MCP
+            llm_decision = LLMRoutingDecision(
+                mode=RouteMode.MCP,
+                intent=state.intent if state.intent in MCP_INTENTS else "check_availability",
+                confidence=0.85,
+                reasoning="ذُكرت عيادة - استخدام MCP",
+            )
+            span.set_attribute("routing.decision_source", "guard.clinic_entity")
         else:
             router = get_router()
             llm_decision = router.decide_route(state, user_query)

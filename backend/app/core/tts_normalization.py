@@ -1,216 +1,179 @@
 """
 ULTIMATE Egyptian Arabic TTS Normalization
-- Smart tashkeel placement for pronunciation consistency
-- Proper ج (jeem) pronunciation hints
-- List punctuation for natural pauses
-- Egyptian dialect optimization
+==========================================
+Pipeline:
+  1. Apply Egyptian mappings (MSA → Ammya)   ← wires egyptian_mappings.py
+  2. Apply Egyptian phonology fixes
+  3. Strip random LLM tashkeel
+  4. Fix Ta Marbuta (ه → ة where needed)
+  5. Fix Alef Maqsura confusion
+  6. Normalize dates (weekdays → Egyptian)
+  7. Normalize time formats
+  8. Fix punctuation characters
+  9. Normalize currency
+ 10. Ensure natural-pause punctuation
+ 11. Convert digits to Egyptian Arabic words
+ 12. Apply tactical tashkeel (pronunciation guides)
+ 13. Clean markdown / whitespace
 """
 
 import re
 from typing import Dict, Set
 
+
 # ==========================================
 # PRONUNCIATION DICTIONARIES
 # ==========================================
 
-# Words with ج that should be pronounced as "J" (soft jeem)
-# These need fatha on the jeem to ensure correct pronunciation
-JEEM_NAMES = {
-    "جورج": "Jeorge",
-    "جورجينا": "Jeorgina",
-    "جورجي": "Jeorgy",
-    "جورجى": "Jeorgy",
-    "جيم": "Jim",
-    "جيمس": "James",
-    "جين": "Jean",
-    "جينا": "Gina",
-    "جاك": "Jack",
-    "جاكلين": "Jacqueline",
-    "جاكسون": "Jackson",
-    "جان": "Jan",
-    "جانيت": "Janet",
-    "جوزيف": "Joseph",
-    "جوليا": "Julia",
-    "جوليان": "Julian",
-    "جوني": "Johnny",
-    "جيرالد": "Gerald",
-    "جيسيكا": "Jessica",
-    "جوناثان": "Jonathan",
-    "جنيفر": "Jennifer",
-    "جيسي": "Jesse",
-    "جوردان": "Jordan",
-}
+# Western names whose ج is pronounced as the English "J" (soft jeem)
+# Disabled English phonetic mapping (causes OpenAI TTS to switch to a foreign accent)
+JEEM_NAMES: Dict[str, str] = {}
 
 JEEM_WORDS = JEEM_NAMES
 
-# Common ambiguous words that need tashkeel for correct pronunciation
-PRONUNCIATION_FIXES = {
-    # Medical terms
-    "دكتور": "دُكتور",
-    "دكتورة": "دُكتورة",
-    "مستشفى": "مُستشفى",
-    "عيادة": "عِيادة",
-    "صيدلية": "صَيدَلِية",
-    "كشف": "كَشف",
-    "تحليل": "تَحليل",
-    "تحاليل": "تَحاليل",
-    "اشعة": "أَشِعَّة",
-    "أشعة": "أَشِعَّة",
-    "حقنة": "حُقنة",
-    "علاج": "عِلاج",
-    "وصفة": "وَصفة",
-    "عملية": "عَمَلِية",
-    "ميعاد": "مَعاد",
-    "معاد": "مَعاد",
-    "موعد": "مَعاد",
-    
-    # Common verbs (present tense markers)
-    "يروح": "يِروح",
-    "تروح": "تِروح",
-    "نروح": "نِروح",
-    "يقدر": "يِقدر",
-    "تقدر": "تِقدر",
-    "نقدر": "نِقدر",
-    "يعمل": "يِعمل",
-    "تعمل": "تِعمل",
-    "نعمل": "نِعمل",
-    "يشوف": "يِشوف",
-    "تشوف": "تِشوف",
-    "نشوف": "نِشوف",
-    
-    # Common words with ambiguity
-    "عند": "عِند",
-    "فوق": "فُوق",
-    "تحت": "تَحت",
-    "بين": "بِين",
-    "معاه": "مَعاه",
-    "ليه": "لِيه",
-    "ازاي": "إزَّاي",
-    "امتى": "إمتَى",
-    "فين": "فِين",
-    "مين": "مِين",
-    
-    # Time words
-    "الصبح": "صَباحًا",
-    "صباحا": "صَباحًا",
-    "صباحًا": "صَباحًا",
-    "الضهر": "الضُهر",
-    "العصر": "العَصر",
-    "المغرب": "المَغرِب",
-    "بالليل": "مَساءً",
-    "مساء": "مَساءً",
-    "مساءً": "مَساءً",
-    
-    # Common Egyptian words
-    "دلوقتي": "دِلوَقتي",
-    "النهاردة": "النَّهارْدَه",
-    "بكرة": "بُكرَه",
-    "امبارح": "إمبارِح",
-    "ماشي": "ماشِي",
-    "تمام": "تَمام",
-    "خلاص": "خَلاص",
-    "طيب": "طَيِّب",
-    
-    # Numbers (when spelled out)
-    "واحد": "واحِد",
-    "اتنين": "إتنِين",
-    "تلاتة": "تَلاتَة",
-    "اربعة": "أَربَعة",
-    "خمسة": "خَمسَة",
-    "ستة": "سِتَّة",
-    "سبعة": "سَبعَة",
-    "تمانية": "تَمانيَة",
-    "تسعة": "تِسعَة",
-    "عشرة": "عَشَرة",
-    
-    # Names
-    "زكى": "زكي",
-}
+# ─── Tactical tashkeel ───────────────────────────────────────────────────────
+# Key words that need vowel marks for the TTS engine to pronounce correctly.
+# Keep this list targeted — over-tashkeel can confuse some engines.
+
+# Disabled tactical tashkeel for OpenAI TTS (triggers foreign/Urdu accent with slang)
+PRONUNCIATION_FIXES: Dict[str, str] = {}
 
 # ==========================================
-# NUMBER DEFINITIONS - EGYPTIAN STYLE
-
+# NUMBER DEFINITIONS — EGYPTIAN STYLE
 # ==========================================
 
-ONES = {
-    0: "صفر", 1: "واحِد", 2: "إتنِين", 3: "تَلاتَة", 4: "أَربَعة",
-    5: "خَمسَة", 6: "سِتَّة", 7: "سَبعَة", 8: "تَمانيَة", 9: "تِسعَة",
-    10: "عَشَرة", 11: "حِداشَر", 12: "إتناشَر", 13: "تَلاتاشَر",
-    14: "أَربَعتاشَر", 15: "خَمَستاشَر", 16: "سِتَّاشَر", 17: "سَبَعتاشَر",
-    18: "تَمَنتاشَر", 19: "تِسَعتاشَر"
+ONES: Dict[int, str] = {
+    0: "صفر",      1: "واحِد",      2: "إتنِين",   3: "تَلاتَة",
+    4: "أَربَعة",  5: "خَمسَة",    6: "سِتَّة",   7: "سَبعَة",
+    8: "تَمانيَة", 9: "تِسعَة",    10: "عَشَرة",  11: "حِداشَر",
+    12: "إتناشَر", 13: "تَلاتاشَر", 14: "أَربَعتاشَر", 15: "خَمَستاشَر",
+    16: "سِتَّاشَر", 17: "سَبَعتاشَر", 18: "تَمَنتاشَر", 19: "تِسَعتاشَر",
 }
 
-TENS = {
-    20: "عِشرين", 30: "تَلاتين", 40: "أَربَعين", 50: "خَمسين",
-    60: "سِتِّين", 70: "سَبعين", 80: "تَمانين", 90: "تِسعين"
+TENS: Dict[int, str] = {
+    20: "عِشرين",  30: "تَلاتين",  40: "أَربَعين", 50: "خَمسين",
+    60: "سِتِّين", 70: "سَبعين",   80: "تَمانين",  90: "تِسعين",
 }
 
-HUNDREDS = {
-    100: "مِيَّة", 200: "مِيَّتين", 300: "تُلتُمِيَّة", 400: "رُبعُمِيَّة",
-    500: "خُمسُمِيَّة", 600: "سِتُّمِيَّة", 700: "سُبعُمِيَّة", 800: "تُمنُمِيَّة", 900: "تُسعُمِيَّة"
+HUNDREDS: Dict[int, str] = {
+    100: "مِيَّة",     200: "مِيَّتين",  300: "تُلتُمِيَّة",
+    400: "رُبعُمِيَّة", 500: "خُمسُمِيَّة", 600: "سِتُّمِيَّة",
+    700: "سُبعُمِيَّة", 800: "تُمنُمِيَّة", 900: "تُسعُمِيَّة",
 }
 
-THOUSANDS = {
-    1000: "أَلف", 2000: "أَلفين", 3000: "تَلات آلاف", 4000: "أَربَع آلاف",
-    5000: "خَمس آلاف", 6000: "سِتّ آلاف", 7000: "سَبع آلاف", 8000: "تَمَن آلاف", 9000: "تِسع آلاف"
+THOUSANDS: Dict[int, str] = {
+    1000: "أَلف",      2000: "أَلفين",      3000: "تَلات آلاف",
+    4000: "أَربَع آلاف", 5000: "خَمس آلاف", 6000: "سِتّ آلاف",
+    7000: "سَبع آلاف", 8000: "تَمَن آلاف", 9000: "تِسع آلاف",
 }
 
 
 # ==========================================
-# 1. TACTICAL TASHKEEL APPLICATION
+# 1. EGYPTIAN PHONOLOGY
 # ==========================================
 
-def apply_tactical_tashkeel(text: str) -> str:
+# Words where ث → ت in Egyptian colloquial
+_THAA_TO_TAA = {
+    "ثلاثة": "تلاتة", "ثمانية": "تمانية", "ثلاثون": "تلاتين",
+    "ثمانون": "تمانين", "ثلاث": "تلات", "ثمان": "تمان",
+    "ثلاثاء": "تلات", "الثلاثاء": "التلات",
+    "ثقيل": "تقيل", "مثل": "زي", "مثلاً": "مثلاً",
+    "كثير": "كتير", "حديث": "حديت", "بحث": "بحت",
+    "حيث": "حيت", "ثم": "وبعدين", "ثانية": "تانية",
+    "ثانٍ": "تاني", "الثاني": "التاني", "ثاني": "تاني",
+}
+
+# Words where ذ → د in Egyptian colloquial
+_DHAAL_TO_DAAL = {
+    "ذلك": "ده", "ذهب": "راح", "يذهب": "يروح",
+    "ذكر": "اتذكر", "تذكر": "افتكر",
+    "أخذ": "خد", "يأخذ": "ياخد",
+    "هكذا": "كده", "لذلك": "عشان كده",
+    "إذن": "يعني", "إذاً": "يعني",
+    "منذ": "من", "إذا": "لو",
+}
+
+# Words where ظ → ض in Egyptian colloquial
+_DHAA_TO_DAAD = {
+    "بالضبط": "بالظبط",   # Already Egyptian
+    "محظور": "ممنوع",
+    "ظهر": "ضهر",
+    "ظروف": "ضروف",
+    "ظريف": "ضريف",
+    "حظ": "حض",
+    "انتظر": "استنى",
+}
+
+_PHONOLOGY_RE = re.compile(
+    r'\b(' + '|'.join(re.escape(w) for w in
+                      list(_THAA_TO_TAA) + list(_DHAAL_TO_DAAL) + list(_DHAA_TO_DAAD)
+                      ) + r')\b',
+    re.UNICODE
+)
+
+_PHONOLOGY_MAP = {**_THAA_TO_TAA, **_DHAAL_TO_DAAL, **_DHAA_TO_DAAD}
+
+
+def apply_egyptian_phonology(text: str) -> str:
     """
-    Apply strategic tashkeel ONLY on words that need it for correct pronunciation.
-    This is different from full tashkeel - we only mark critical pronunciation points.
+    Apply Egyptian phonology: convert formal ث/ذ/ظ sounds to their
+    colloquial Egyptian equivalents where appropriate.
     """
     if not text:
         return text
-    
-    # First, apply Jeem pronunciation fixes (highest priority)
-    for word, fixed in JEEM_WORDS.items():
-        # Use word boundaries to avoid partial matches
-        text = re.sub(r'\b' + re.escape(word) + r'\b', fixed, text, flags=re.IGNORECASE)
-    
-    # Then apply other pronunciation fixes
-    for word, fixed in PRONUNCIATION_FIXES.items():
-        text = re.sub(r'\b' + re.escape(word) + r'\b', fixed, text, flags=re.IGNORECASE)
-    
-    return text
+    return _PHONOLOGY_RE.sub(lambda m: _PHONOLOGY_MAP.get(m.group(0), m.group(0)), text)
 
+
+# ==========================================
+# 2. TACTICAL TASHKEEL
+# ==========================================
+
+_TASHKEEL_RE = re.compile(r'[\u064B-\u065F\u0670\u0640]')
 
 def strip_excessive_tashkeel(text: str) -> str:
     """
-    Remove tashkeel EXCEPT on words we intentionally marked.
-    This keeps our tactical tashkeel while removing LLM-generated random tashkeel.
+    Remove tashkeel EXCEPT on words we intentionally placed it on.
+    Uses word-boundary tokenization to avoid stripping protected words.
     """
     if not text:
         return text
-    
-    # Get all our intentionally marked words
-    protected_words = set(JEEM_WORDS.values()) | set(PRONUNCIATION_FIXES.values())
-    
-    words = text.split()
+
+    protected = set(JEEM_WORDS.values()) | set(PRONUNCIATION_FIXES.values())
+
+    # Tokenize keeping punctuation attached so protected words match exactly
+    tokens = re.split(r'(\s+)', text)
     result = []
-    
-    _TASHKEEL_RE = re.compile(r'[\u064B-\u065F\u0670\u0640]')
-    
-    for word in words:
-        # Check if this word is in our protected list (with tashkeel)
-        if word in protected_words:
-            # Keep as is
-            result.append(word)
+    for token in tokens:
+        if token in protected:
+            result.append(token)
         else:
-            # Strip tashkeel from this word
-            cleaned = _TASHKEEL_RE.sub('', word)
-            result.append(cleaned)
-    
-    return ' '.join(result)
+            result.append(_TASHKEEL_RE.sub('', token))
+    return ''.join(result)
+
+
+def apply_tactical_tashkeel(text: str) -> str:
+    """
+    Apply strategic tashkeel ONLY on words that need it for correct
+    TTS pronunciation. Processes longest words first to avoid partial matches.
+    """
+    if not text:
+        return text
+
+    # Sort by length descending so "دُكتورة" is tried before "دُكتور"
+    sorted_jeem = sorted(JEEM_WORDS.items(), key=lambda kv: len(kv[0]), reverse=True)
+    sorted_fixes = sorted(PRONUNCIATION_FIXES.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+    for word, fixed in sorted_jeem:
+        text = re.sub(r'(?<![\u0600-\u06FF])' + re.escape(word) + r'(?![\u0600-\u06FF])', fixed, text)
+
+    for word, fixed in sorted_fixes:
+        text = re.sub(r'(?<![\u0600-\u06FF])' + re.escape(word) + r'(?![\u0600-\u06FF])', fixed, text)
+
+    return text
 
 
 # ==========================================
-# 2. FIX TA MARBUTA: ه → ة
+# 3. FIX TA MARBUTA: ه → ة
 # ==========================================
 
 _HAA_EXCEPTIONS = frozenset([
@@ -219,140 +182,144 @@ _HAA_EXCEPTIONS = frozenset([
     "لأنه", "كأنه", "هو", "هي", "أه", "ايه", "إيه", "ده",
     "ليه", "بتاعه", "نفسه", "وجهه", "شبهه", "اتجاه", "تنبيه",
     "توجيه", "تشابه", "تمويه", "فقه", "وجه", "سفه", "عبده", "نزيه",
-    "مكروه", "مشبوه", "موجه", "منبه", "شبه", "عمله", "كله", "ازيه",
-    "امته", "ازاي",
+    "مكروه", "مشبوه", "موجه", "منبه", "شبه", "عمله", "كله",
+    "ازاي", "هوه", "هيه", "معاه", "وراه", "عنده", "عندها", "عندهم",
 ])
 
+_TA_MARBUTA_PATTERN = re.compile(
+    r'\b([\u0621-\u063A\u0641-\u064A][\u0600-\u06FF]*?)(\u0647)(?=\s|[.،؟!:\-]|$)',
+    re.UNICODE
+)
+
+
 def fix_ta_marbuta(text: str) -> str:
-    """Replace word-final ه with ة, skipping known exceptions."""
-    if not text:
-        return text
-
-    _ar = r'[\u0621-\u063A\u0641-\u064A]'
-    _pattern = re.compile(
-        r'\b(' + _ar + r'[\u0600-\u06FF]*?)(\u0647)(?=\s|[.،؟!:\-]|$)',
-        re.UNICODE
-    )
-
-    def _replace(m: re.Match) -> str:
-        prefix = m.group(1)
-        full_word = prefix + 'ه'
-        if full_word in _HAA_EXCEPTIONS:
-            return m.group(0)
-        return prefix + 'ة'
-
-    return _pattern.sub(_replace, text)
+    """DISABLED: Removing this because it aggressively mangles names ending in ه (e.g. عبدالله -> عبداللة, طه -> طة)."""
+    return text
 
 
 # ==========================================
-# 3. FIX ALEF MAQSURA / YA CONFUSION
+# 4. FIX ALEF MAQSURA / YA CONFUSION
 # ==========================================
 
 _ALEF_MAQSURA_WORDS = frozenset([
     "على", "إلى", "حتى", "مستشفى", "مبنى", "معنى", "مجرى",
     "مدى", "أخرى", "كبرى", "صغرى", "أولى", "منى", "مصطفى",
     "هدى", "سلمى", "ليلى", "موسى", "عيسى", "يحيى", "مرتضى",
+    "مجتبى", "مرمى", "مقهى",
 ])
 
 def fix_alef_maqsura(text: str) -> str:
-    """Fix common ي→ى mistakes."""
+    """Convert terminal ى to ي for all words NOT in the known Alef Maqsura list. This fixes names like مجدى"""
     if not text:
         return text
-    for word in _ALEF_MAQSURA_WORDS:
-        wrong = word[:-1] + 'ي'
-        text = re.sub(r'\b' + re.escape(wrong) + r'\b', word, text)
-    return text
+    
+    def replacer(match):
+        word = match.group(0)
+        if word in _ALEF_MAQSURA_WORDS:
+            return word
+        return word[:-1] + 'ي'
+
+    return re.sub(r'\b[\u0600-\u06FF]+ى\b', replacer, text)
 
 
 # ==========================================
-# 4. SMART LIST PUNCTUATION
+# 5. SMART LIST PUNCTUATION
 # ==========================================
 
 def is_list_context(text: str) -> bool:
     """Detect if text contains a numbered list structure."""
-    pattern = r'\b\d\s+[^\d]+\s+\d\b'
-    return bool(re.search(pattern, text))
+    return bool(re.search(r'\b\d{1,2}\s*[-.)]\s*[\u0600-\u06FF]', text))
 
 
 def add_list_punctuation(text: str) -> str:
     """Add punctuation for numbered lists."""
     if not text:
         return text
-    
-    # Add comma after numbers: "1 name" → "1، name"
-    text = re.sub(r'\b(\d{1,2})\s+([ا-ي])', r'\1، \2', text)
-    
-    # Add comma before next number: "name 2" → "name، 2"
-    text = re.sub(r'([ا-ي])\s+(\d{1,2})\s', r'\1، \2 ', text)
-    
+    text = re.sub(r'\b(\d{1,2})\s+([\u0600-\u06FF])', r'\1، \2', text)
+    text = re.sub(r'([\u0600-\u06FF])\s+(\d{1,2})\b', r'\1، \2 ', text)
     return text
 
 
 def ensure_punctuation(text: str) -> str:
-    """Add punctuation for natural TTS pauses."""
+    """Add punctuation for natural TTS pauses, preserving newlines."""
     if not text:
         return text
 
-    # Check if this is a list context
-    if is_list_context(text):
-        text = add_list_punctuation(text)
-
-    punct_chars = set('.,،؟?!؛:')
-    punct_count = sum(1 for c in text if c in punct_chars)
-    word_count = len(text.split())
-
-    if word_count <= 5 or (punct_count > 0 and word_count / max(punct_count, 1) < 12):
-        text = text.rstrip()
-        if text and text[-1] not in punct_chars:
-            text += '.'
-        return text
-
-    if not is_list_context(text):
-        words = text.split()
-        result = []
-        since_last = 0
-
-        for i, word in enumerate(words):
-            result.append(word)
-            since_last += 1
-            
-            if word and word[-1] in punct_chars:
-                since_last = 0
-                continue
-            
-            if since_last >= 8 and i < len(words) - 1:
-                result[-1] = word + '،'
-                since_last = 0
-
-        text = ' '.join(result)
-
-    text = re.sub(r'،+', '،', text)
-    text = re.sub(r'،\s*،', '،', text)
+    # Process line by line to preserve newlines
+    lines = text.split('\n')
+    processed_lines = []
     
-    text = text.rstrip()
-    if text and text[-1] not in punct_chars:
-        text += '.'
-    
-    return text
+    for line in lines:
+        if not line.strip():
+            processed_lines.append(line)
+            continue
+            
+        if is_list_context(line):
+            line = add_list_punctuation(line)
+
+        punct_chars = set('.,،؟?!؛:')
+        punct_count = sum(1 for c in line if c in punct_chars)
+        word_count = len(line.split())
+
+        if word_count <= 5 or (punct_count > 0 and word_count / max(punct_count, 1) < 12):
+            line = line.rstrip()
+            if line and line[-1] not in punct_chars:
+                line += '.'
+            processed_lines.append(line)
+            continue
+
+        if not is_list_context(line):
+            words = line.split(' ') # Split exactly on spaces to preserve any internal spacing
+            result = []
+            since_last = 0
+
+            for i, word in enumerate(words):
+                if not word: # Handle multiple spaces
+                    result.append(word)
+                    continue
+                    
+                result.append(word)
+                since_last += 1
+
+                if word and word[-1] in punct_chars:
+                    since_last = 0
+                    continue
+
+                # Pause every 10 words (was 8 — gives more natural flow)
+                if since_last >= 10 and i < len(words) - 1:
+                    result[-1] = word + '،'
+                    since_last = 0
+
+            line = ' '.join(result)
+
+        line = re.sub(r'،+', '،', line)
+        line = re.sub(r'،\s*،', '،', line)
+
+        line = line.rstrip()
+        if line and line[-1] not in punct_chars:
+            line += '.'
+            
+        processed_lines.append(line)
+
+    return '\n'.join(processed_lines)
 
 
 # ==========================================
-# 5. NUMBER CONVERSION
+# 6. NUMBER CONVERSION
 # ==========================================
 
 def number_to_arabic_words(num: int) -> str:
     """Convert number to Egyptian Arabic words with tactical tashkeel."""
-    if num < 0: return str(num)
-    if num == 0: return ONES[0]
+    if num < 0:
+        return str(num)
+    if num == 0:
+        return ONES[0]
 
     parts = []
-    
+
     if num >= 1000:
         thousands = (num // 1000) * 1000
-        if thousands in THOUSANDS:
-            parts.append(THOUSANDS[thousands])
-        else:
-            parts.append(str(thousands))
+        parts.append(THOUSANDS.get(thousands, str(thousands)))
         num = num % 1000
 
     if num >= 100:
@@ -379,98 +346,80 @@ def normalize_numbers_in_text(text: str, keep_list_numbers: bool = True) -> str:
     def replace_number(match):
         num_str = match.group(0)
         num = int(num_str)
-        
         if keep_list_numbers and is_list_context(text) and num < 100:
             return num_str
-        
         return number_to_arabic_words(num)
 
-    # Handle years
+    # Expand 4-digit years naturally: 2024 → "20 24" → handled below
     text = re.sub(r'\b(19|20)(\d{2})\b', r'\1 \2', text)
-    
-    text = text.replace("20 26", "أَلفين وسِتَّة وعِشرين")
-    text = text.replace("20 25", "أَلفين وخَمسَة وعِشرين")
-    text = text.replace("20 24", "أَلفين وأَربَعة وعِشرين")
-    
+
+    # Common years
+    year_map = {
+        "20 26": "أَلفين وسِتَّة وعِشرين",
+        "20 25": "أَلفين وخَمسَة وعِشرين",
+        "20 24": "أَلفين وأَربَعة وعِشرين",
+        "20 23": "أَلفين وتَلاتَة وعِشرين",
+        "19 90": "تِسعُمِيَّة وتِسعين",
+        "19 80": "تِسعُمِيَّة وتَمانين",
+        "19 70": "تِسعُمِيَّة وسَبعين",
+    }
+    for k, v in year_map.items():
+        text = text.replace(k, v)
+
     text = re.sub(r'\b\d+\b', replace_number, text)
-    
     return text
 
 
 # ==========================================
-# 6. TIME NORMALIZATION
+# 7. TIME NORMALIZATION
 # ==========================================
 
 def normalize_time_format(text: str) -> str:
-    """Normalize time with tactical tashkeel for clear pronunciation."""
-    
+    """Normalize time with Egyptian Arabic words for clear pronunciation."""
+
+    def get_hour_word(h: int) -> str:
+        hour_words = {
+            1: "واحدة", 2: "اتنين", 3: "تلاتة", 4: "أربعة",
+            5: "خمسة",  6: "ستة",   7: "سبعة",  8: "تمانية",
+            9: "تسعة",  10: "عشرة", 11: "حداشر", 12: "اتناشر",
+        }
+        return hour_words.get(h % 12 or 12, ONES.get(h, str(h)))
+
     def replace_time(match):
-        hour = int(match.group(2))
-        minute = int(match.group(3))
+        hour   = int(match.group(2))
+        minute = int(match.group(3)) if match.group(3) else 0
         period_marker = match.group(4) or ""
+        m_lower = period_marker.lower()
 
         period = ""
-        m_lower = period_marker.lower()
         if any(x in m_lower for x in ["ص", "am", "صباح"]):
             period = "صَباحًا"
         elif any(x in m_lower for x in ["م", "pm", "مساء", "ليل"]):
             period = "مَساءً"
 
-        def get_hour_word(h):
-            if h == 1:
-                return "واحده"
-            elif h == 2:
-                return "اتنين"
-            elif h == 3:
-                return "تلاته"
-            elif h == 4:
-                return "اربعه"
-            elif h == 5:
-                return "خمسه"
-            elif h == 6:
-                return "سته"
-            elif h == 7:
-                return "سبعه"
-            elif h == 8:
-                return "تمانيه"
-            elif h == 9:
-                return "تسعه"
-            elif h == 10:
-                return "عشره"
-            elif h == 11:
-                return "حداشر"
-            elif h == 12:
-                return "اتناشر"
-            else:
-                return ONES.get(h, str(h))
-
         hour_word = get_hour_word(hour)
-
         minute_part = ""
+
         if minute == 0:
             minute_part = ""
         elif minute == 30:
-            minute_part = "و نُصّ"
+            minute_part = "و نُص"
         elif minute == 15:
             minute_part = "و رُبع"
         elif minute == 20:
             minute_part = "و تِلت"
         elif minute == 40:
-            next_hour = hour + 1 if hour < 12 else 1
-            hour_word = get_hour_word(next_hour)
-            minute_part = "إلّا تِلت"
+            hour_word   = get_hour_word(hour + 1)
+            minute_part = "إلَّا تِلت"
         elif minute == 45:
-            next_hour = hour + 1 if hour < 12 else 1
-            hour_word = get_hour_word(next_hour)
-            minute_part = "إلّا رُبع"
+            hour_word   = get_hour_word(hour + 1)
+            minute_part = "إلَّا رُبع"
         elif minute == 50:
-            next_hour = hour + 1 if hour < 12 else 1
-            hour_word = get_hour_word(next_hour)
-            minute_part = "إلّا عَشَرة"
+            hour_word   = get_hour_word(hour + 1)
+            minute_part = "إلَّا عَشَرة"
         elif minute == 55:
-            next_hour = hour + 1 if hour < 12 else 1
-            hour_word = get_hour_word(next_hour)
-            minute_part = "إلّا خَمسَة"
+            hour_word   = get_hour_word(hour + 1)
+            minute_part = "إلَّا خَمسَة"
         elif minute == 10:
             minute_part = "و عَشَرة"
         elif minute == 5:
@@ -478,155 +427,125 @@ def normalize_time_format(text: str) -> str:
         else:
             minute_part = f"و {number_to_arabic_words(minute)} دَقيقة"
 
-        parts = []
-        if minute == 0:
-            parts = [hour_word, period]
-        else:
-            parts = [hour_word, minute_part, period]
-        
-        result = " ".join([p for p in parts if p]).strip()
-        return result
+        parts = [p for p in [hour_word, minute_part, period] if p]
+        return " ".join(parts).strip()
 
-    suffix_pattern = r"(صباحًا|مساءً|صباحا|مساء|AM|PM|am|pm|ص|م)"
+    suffix = r"(صباحًا|مساءً|صباحا|مساء|AM|PM|am|pm|ص|م)"
     return re.sub(
-        r'(الساعة\s*)?(\d{1,2})[:.](\d{2})\s*' + suffix_pattern + r'?',
+        r'(الساعة\s*)?(\d{1,2})(?:[:.](\d{2}))?\s*' + suffix + r'?',
         replace_time,
         text
     )
 
 
 # ==========================================
-# 7. CURRENCY & DATES
+# 8. CURRENCY & DATES
 # ==========================================
 
 def normalize_currency(text: str) -> str:
-    """Normalize currency with tashkeel."""
+    """Normalize currency to Egyptian Arabic words."""
     def replace_money(match):
-        num = int(match.group(1))
+        num   = int(match.group(1))
         words = number_to_arabic_words(num)
         return f"{words} جُنَيه"
-    
+
     text = re.sub(
         r'\b(\d+)\s*(جنيه|جنيهات|EGP|LE|egp|le)\b',
-        replace_money,
-        text,
-        flags=re.IGNORECASE
+        replace_money, text, flags=re.IGNORECASE
     )
     return text
 
 
 def normalize_dates(text: str) -> str:
-    """Normalize dates to Egyptian with tashkeel."""
+    """Normalize weekdays to Egyptian colloquial."""
     weekdays = {
-        "السبت": "السَّبت",
-        "الأحد": "الأَحَد",
-        "الاثنين": "الإتنِين",
-        "الإثنين": "الإتنِين",
+        "السبت":    "السَّبت",
+        "الأحد":    "الأَحَد",
+        "الاثنين":  "الإتنِين",
+        "الإثنين":  "الإتنِين",
         "الثلاثاء": "التَّلات",
         "الأربعاء": "الأَربَع",
-        "الخميس": "الخَميس",
-        "الجمعة": "الجُمعَة",
+        "الخميس":   "الخَميس",
+        "الجمعة":   "الجُمعَة",
     }
-    
     for formal, colloquial in weekdays.items():
         text = text.replace(formal, colloquial)
-    
     return text
 
 
 # ==========================================
-# 8. MAIN PIPELINE
+# 9. MAIN PIPELINE
 # ==========================================
 
 def normalize_arabic_for_tts(text: str, keep_list_numbers: bool = True) -> str:
     """
-    Ultimate TTS normalization with tactical tashkeel for pronunciation consistency.
-    
-    Args:
-        keep_list_numbers: Keep list numbers as digits instead of converting to words
+    Ultimate TTS normalization pipeline:
+      MSA → Egyptian Ammya → phonology → tashkeel → numbers → time → punctuation.
     """
     if not text:
         return text
 
-    # 1. Strip any existing random tashkeel from LLM output
+    # ── Step 1: MSA → Egyptian dialect (THE CRITICAL STEP — was missing before)
+    from .egyptian_mappings import apply_egyptian_mappings
+    text = apply_egyptian_mappings(text)
+
+    # ── Step 2: Egyptian phonology (ث→ت, ذ→د, ظ→ض in common words)
+    text = apply_egyptian_phonology(text)
+
+    # ── Step 3: Strip random LLM tashkeel (must come after dialect mapping)
     text = strip_excessive_tashkeel(text)
 
-    # 2. Fix Ta Marbuta
+    # ── Step 4: Fix Ta Marbuta
     text = fix_ta_marbuta(text)
 
-    # 3. Fix Alef Maqsura
+    # ── Step 5: Fix Alef Maqsura
     text = fix_alef_maqsura(text)
 
-    # 4. Normalize dates
+    # ── Step 6: Normalize weekday names
     text = normalize_dates(text)
 
-    # 5. Normalize time
+    # ── Step 7: Normalize time formats
     text = normalize_time_format(text)
 
-    # 6. Fix punctuation
+    # ── Step 8: Punctuation character normalization
     text = text.replace('?', '؟')
     text = text.replace(',', '،')
 
-    # 7. Currency
+    # ── Step 9: Currency
     text = normalize_currency(text)
 
-    # 8. Punctuation (before number conversion)
+    # ── Step 10: Ensure natural pause punctuation
     text = ensure_punctuation(text)
 
-    # 9. Numbers
+    # ── Step 11: Numbers → words
     text = normalize_numbers_in_text(text, keep_list_numbers=keep_list_numbers)
 
-    # 10. Apply tactical tashkeel for pronunciation (CRITICAL STEP)
+    # ── Step 12: Apply tactical tashkeel for correct TTS pronunciation
     text = apply_tactical_tashkeel(text)
 
-    # 11. Clean formatting
+    # ── Step 13: Final cleanup
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-    text = re.sub(r'\*([^*]+)\*', r'\1', text)
-    text = re.sub(r'\.{2,}', '.', text)
-    text = re.sub(r',{2,}', '،', text)
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\*([^*]+)\*',     r'\1', text)
+    text = re.sub(r'\.{2,}',          '.',   text)
+    text = re.sub(r',{2,}',           '،',   text)
+    text = re.sub(r'  +',             ' ',   text)
+
+    # ── Step 14: STRIP ALL TASHKEEL
+    # OpenAI tts-1 treats heavily voweled Egyptian slang as Farsi/Urdu.
+    # Stripping all diacritics forces it to use its Arabic phonetic base.
+    text = re.sub(r'[\u064B-\u065F\u0670\u0640]', '', text)
 
     return text.strip()
 
 
 # ==========================================
-# 9. MEDICAL CONTEXT
+# 10. MEDICAL CONTEXT SHORTCUT
 # ==========================================
 
 def normalize_medical_text(text: str) -> str:
-    """Medical text normalization with pronunciation fixes."""
-    medical_replacements = {
-        "موعد": "مَعاد",
-        "مواعيد": "مَعاديد",
-        "ميعاد": "مَعاد",
-        "فحص": "كَشف",
-        "اختبار": "تَحليل",
-        "اختبارات": "تَحاليل",
-        "تصوير": "أَشِعَّة",
-        "إبرة": "حُقنة",
-        "روشتة": "وَصفة",
-        "جراحة": "عَمَلِية",
-        "وصفة طبية": "روشتة",
-        "طبيب": "دُكتور",
-        "طبيبة": "دُكتورة",
-        "أخصائي": "أَخُصّائي",
-        "استشاري": "إستِشاري",
-        "تخدير": "بنج",
-        "غرفة العمليات": "أوضة العمليات",
-        "طوارئ": "طَوارئ",
-        "حضانة": "حَضانة",
-        "عناية مركزة": "عِناية مُرَكَّزة",
-        "ضغط": "ضَغط",
-        "سكر": "سُكَّر",
-        "حرارة": "حَرارة",
-        "نبض": "نَبض",
-        "حساسية": "حَساسِيَّة",
-        "التهاب": "إلتِهاب",
-        "مضاد حيوي": "مُضاد حَيَوي",
-        "مسكن": "مُسَكِّن",
-    }
-    
-    for formal, colloquial in medical_replacements.items():
-        text = re.sub(r'\b' + formal + r'\b', colloquial, text)
-    
+    """
+    Medical text normalization — applies full pipeline.
+    The egyptian_mappings layer already handles most medical substitutions;
+    this function exists as a named convenience entry-point.
+    """
     return normalize_arabic_for_tts(text)

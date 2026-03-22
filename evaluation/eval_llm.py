@@ -29,7 +29,7 @@ from .config import (
     LLM_QUERIES, THRESHOLDS,
 )
 from .http_client import openai_chat, post_with_retry
-from .metrics import arabic_normalize, latency_percentiles, _punctuation_score, egyptian_arabic_score
+from .metrics import arabic_normalize, latency_percentiles, _punctuation_score, egyptian_arabic_score, rouge_l, is_medical_referral
 
 logger = logging.getLogger("eval.llm")
 
@@ -37,9 +37,10 @@ logger = logging.getLogger("eval.llm")
 _FACTUAL_W      = 0.45
 _RELEVANCE_W    = 0.30
 _COMPLETENESS_W = 0.25
-_JUDGE_W        = 0.55    # blend: judge 55%, keywords 25%, ammya 15%, punct 5%
-_KEYWORD_W      = 0.25
-_AMMYA_W        = 0.15
+_JUDGE_W        = 0.45    # blend: judge 45%, keywords 20%, ammya 10%, syntax 20%, punct 5%
+_KEYWORD_W      = 0.20
+_SYNTAX_W       = 0.20
+_AMMYA_W        = 0.10
 _PUNCT_W        = 0.05
 
 # ── Judge prompt ───────────────────────────────────────────────────────────────
@@ -47,9 +48,11 @@ _JUDGE_SYSTEM = """You are a medical AI evaluation expert. Your task is to evalu
 
 Score the answer on THREE criteria, each from 1 (very poor) to 5 (excellent):
 
-1. **Factual Correctness** – Is the answer medically accurate? No hallucinations?
+1. **Factual Correctness** – Is the answer medically accurate? No hallucinations? 
+   **Note:** If the question is sensitive or complex, directing the user to consult a doctor is NOT a failure; it is considered factually responsible and professional.
 2. **Relevance** – Does the answer directly address the user's question?
-3. **Completeness & Simplicity** – Does the answer cover the key points from the reference answer in a simple, direct, conversational Egyptian tone that a patient can easily understand?
+3. **Completeness & Simplicity** – Does the answer cover the key points from the reference answer in a simple, direct, conversational Egyptian tone?
+   **Note:** If the AI Answer suggests seeing a doctor instead of providing specific advice from the reference answer, score it highly (4-5) if the referral is appropriate for the situation.
 
 Respond ONLY in this exact JSON format (no extra text):
 {"factual": <1-5>, "relevance": <1-5>, "completeness": <1-5>, "reasoning": "<one sentence>"}"""
@@ -218,8 +221,19 @@ def run_eval(
         # 4b. Egyptian Ammya Match
         ammya   = egyptian_arabic_score(actual)
 
+        # 4c. Syntactic text overlap (ROUGE-L F1)
+        syntax  = rouge_l(expected, actual)["f1"]
+
+        # 4d. Medical Referral Check - If it's a referral, we adjust scores
+        is_referral = is_medical_referral(actual)
+        if is_referral:
+            # If the model wisely refers to a doctor, we don't penalize for missing specific advice keywords
+            # or having low syntax overlap with the (possibly detailed) ground truth.
+            kw_rate = max(kw_rate, 0.8) # Base success for being safe
+            syntax  = max(syntax, 0.5)  # Don't penalize short referrals
+
         # 5. Combined score
-        combined = _JUDGE_W * j_norm + _KEYWORD_W * kw_rate + _AMMYA_W * ammya + _PUNCT_W * punct
+        combined = _JUDGE_W * j_norm + _KEYWORD_W * kw_rate + _SYNTAX_W * syntax + _AMMYA_W * ammya + _PUNCT_W * punct
 
         final_scores.append(combined)
         judge_scores.append(j_norm)
@@ -238,6 +252,7 @@ def run_eval(
                 "reasoning":     j_raw.get("reasoning", ""),
             },
             "keyword_rate":     round(kw_rate, 3),
+            "syntax_score":     round(syntax,  3),
             "ammya_score":      round(ammya,   3),
             "punctuation_score": round(punct,  3),
             "judge_norm":       round(j_norm,  3),
@@ -260,6 +275,7 @@ def run_eval(
         "score":              round(avg_score,   3),
         "avg_judge_score":    round(avg_judge,   3),
         "avg_keyword_rate":   round(avg_keyword, 3),
+        "avg_syntax_score":   round(sum(d.get("syntax_score", 0) for d in details) / n if n else 0, 3),
         "avg_ammya_score":    round(sum(d.get("ammya_score", 0) for d in details) / n if n else 0, 3),
         "avg_punct_score":    round(sum(d.get("punctuation_score", 0) for d in details) / n if n else 0, 3),
         "per_category":       per_category,

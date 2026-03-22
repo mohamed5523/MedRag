@@ -59,6 +59,7 @@ THRESHOLDS = {
     "mcp_slot_f1_min":          0.75,   # Min required-slot F1
     "rag_precision_min":        0.60,   # Min retrieval precision
     "whatsapp_success_rate_min": 0.90,  # Min end-to-end success rate
+    "tts_asr_score_min":        0.70,   # Min end-to-end TTS+ASR score
 }
 
 # ── Composite pass threshold ───────────────────────────────────────────────────
@@ -69,11 +70,12 @@ COMPOSITE_PASS_THRESHOLD = float(os.getenv("COMPOSITE_PASS_THRESHOLD", "0.85"))
 # Component weights for composite score
 COMPOSITE_WEIGHTS = {
     "llm":      0.30,
-    "asr":      0.20,
+    "asr":      0.15,
     "mcp":      0.20,
     "rag":      0.20,
     "tts":      0.05,
     "whatsapp": 0.05,
+    "tts_asr":  0.05,
 }
 
 # ── Provider / model labels ───────────────────────────────────────────────────

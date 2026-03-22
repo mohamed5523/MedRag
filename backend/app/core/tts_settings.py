@@ -10,16 +10,16 @@ load_dotenv()
 class TTSSettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", env_file_encoding="utf-8")
 
-    # Provider selection: "openai" (default), "azure", or "elevenlabs"
+    # Provider selection: "openai" (default), "azure", or "elevenlabs" (legacy)
     TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "openai").lower()
 
     # OpenAI TTS
     OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
-    OPENAI_TTS_MODEL: str = os.getenv("OPENAI_TTS_MODEL", "tts-1-hd")
+    OPENAI_TTS_MODEL: str = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
     OPENAI_TTS_VOICE: str = os.getenv("OPENAI_TTS_VOICE", "nova")
     OPENAI_TTS_AUDIO_FORMAT: str = os.getenv("OPENAI_TTS_AUDIO_FORMAT", "mp3")
-    
-    # ElevenLabs
+
+    # ElevenLabs (legacy — kept for backward compatibility)
     ELEVENLABS_API_KEY: str | None = os.getenv("ELEVENLABS_API_KEY")
     ELEVENLABS_VOICE_ID: str | None = os.getenv("ELEVENLABS_VOICE_ID")
     ELEVENLABS_MODEL: str = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
@@ -28,8 +28,10 @@ class TTSSettings(BaseSettings):
     ELEVENLABS_STYLE: float = float(os.getenv("ELEVENLABS_STYLE", "0.4"))
     ELEVENLABS_OUTPUT_FORMAT: str = os.getenv("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128")
 
-    # ASR (Speech-to-Text) provider: "elevenlabs" or "groq"
-    ASR_PROVIDER: str = os.getenv("ASR_PROVIDER", "elevenlabs").lower()
+    # ASR (Speech-to-Text) provider: "groq" (default) or "elevenlabs" (legacy)
+    ASR_PROVIDER: str = os.getenv("ASR_PROVIDER", "groq").lower()
+    GROQ_WHISPER_MODEL: str = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
+    # Legacy ElevenLabs ASR model (kept for backward compatibility)
     ELEVENLABS_ASR_MODEL: str = os.getenv("ELEVENLABS_ASR_MODEL", "scribe_v1")
 
     # Azure Neural TTS (Cognitive Services Speech)

@@ -134,21 +134,99 @@ async def _get_provider_payload() -> Dict[str, Any]:
     return payload
 
 
-@mcp.tool()
-async def get_clinic_provider_list() -> str:
-    """Get complete list of all clinics and providers.
+def _format_mcp_response(data: Any, title: str = "Data") -> str:
+    """Recursively formats JSON data into a clean, concise Markdown string for the LLM."""
+    if not data:
+        return "No data available."
     
-    This endpoint returns all clinics and providers data to use for filtering schedule.
-    No filtering parameters are required.
-    
-    Returns:
-        JSON response containing clinic and provider information with Arabic and Latin names
-    """
+    if isinstance(data, dict):
+        # Unwrap standard 'data' or 'success' keys if they are the only things there
+        if "data" in data and len(data) <= 2:
+            return _format_mcp_response(data["data"], title)
+            
+        lines = []
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                lines.append(f"### {k}")
+                lines.append(_format_mcp_response(v, k))
+            else:
+                lines.append(f"- **{k}**: {v}")
+        return "\n".join(lines)
+        
+    elif isinstance(data, list):
+        if not data:
+            return "Empty list."
+            
+        lines = []
+        for i, item in enumerate(data):
+            if isinstance(item, dict):
+                # Identify main title
+                name_keys = ["DoctorNameA", "DoctorNameL", "clinicName", "serviceNameA", "ServiceName", "name", "title"]
+                item_title = f"Item {i+1}"
+                for nk in name_keys:
+                    if nk in item and item[nk]:
+                        item_title = str(item[nk])
+                        break
+                
+                lines.append(f"\n- **{item_title}**")
+                for k, v in item.items():
+                    if k in name_keys and str(v) == item_title: continue
+                    if v is None or v == "" or str(v).strip() == "" or v == [] or v == {}: continue
+                    
+                    if isinstance(v, (dict, list)):
+                        lines.append(f"  - *{k}*:")
+                        sub_lines = _format_mcp_response(v, k).split("\n")
+                        lines.extend([f"    {sl}" for sl in sub_lines if sl.strip()])
+                    else:
+                        lines.append(f"  - *{k}*: {v}")
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+        
+    return str(data)
+
+async def _fetch_clinic_provider_list() -> str:
+    """Internal helper to fetch the raw provider list."""
     return await fetch_text(
         settings.provider_list_url,
         auth=settings.auth,
     )
 
+@mcp.tool()
+async def get_clinic_provider_list() -> str:
+    """Get complete list of all clinics and providers.
+    
+    CRITICAL INSTRUCTION: You MUST present this data to the user exactly in a structured format (tables or lists). DO NOT filter out or omit any subset of the data. 
+    
+    This endpoint returns all clinics and providers data to use for filtering schedule.
+    No filtering parameters are required.
+    
+    Returns:
+        Structured Markdown containing clinic and provider information.
+    """
+    raw = await _fetch_clinic_provider_list()
+    try:
+        data = json.loads(raw)
+        return _format_mcp_response(data, "Clinics and Providers")
+    except Exception:
+        return raw
+
+
+async def _fetch_clinic_provider_schedule(
+    clinicid: int,
+    dateFrom: str,
+    dateTo: str,
+    providerid: Optional[int] = None
+) -> str:
+    """Internal helper to fetch the raw provider schedule."""
+    params = {"clinicid": clinicid, "dateFrom": dateFrom, "dateTo": dateTo}
+    if providerid is not None:
+        params["providerId"] = providerid
+    return await fetch_text(
+        settings.provider_schedule_url,
+        auth=settings.auth,
+        params=params,
+    )
 
 @mcp.tool()
 async def get_clinic_provider_schedule(
@@ -158,6 +236,8 @@ async def get_clinic_provider_schedule(
     providerid: Optional[int] = None
 ) -> str:
     """Get clinic provider schedule information.
+    
+    CRITICAL INSTRUCTION: You MUST output the results to the user as a structured list (e.g. bullet points). DO NOT summarize into a paragraph. You MUST list EVERY SINGLE DOCTOR returned in the data. DO NOT omit or skip any doctor, and always include their exceptions or variations (e.g. 'معتذر' or 'بديل'). 
     
     This endpoint returns a list of clinic providers with their related details and schedules.
     You can filter the results using the available query parameters.
@@ -169,27 +249,34 @@ async def get_clinic_provider_schedule(
         providerid (int, optional): Specific provider doctor ID to filter results
     
     Returns:
-        JSON response containing provider schedule information including shift times
+        Structured Markdown containing provider schedule information including shift times
     """
     if not dateFrom:
         raise ValueError("dateFrom is required")
     if not dateTo:
         raise ValueError("dateTo is required")
         
-    # Build request parameters
-    params = {}
-    params["clinicid"] = clinicid
-    params["dateFrom"] = dateFrom
-    params["dateTo"] = dateTo
+    raw = await _fetch_clinic_provider_schedule(clinicid, dateFrom, dateTo, providerid)
+    try:
+        data = json.loads(raw)
+        return _format_mcp_response(data, "Provider Schedule")
+    except Exception:
+        return raw
+
+
+async def _fetch_service_price(
+    clinicid: int,
+    providerid: Optional[int] = None
+) -> str:
+    """Internal helper to fetch the raw service pricing."""
+    params = {"clinicid": clinicid}
     if providerid is not None:
-        params["providerId"] = providerid
-    
+        params["providerId"] = providerid 
     return await fetch_text(
-        settings.provider_schedule_url,
+        settings.service_price_url,
         auth=settings.auth,
         params=params,
     )
-
 
 @mcp.tool()
 async def get_service_price(
@@ -205,23 +292,17 @@ async def get_service_price(
         providerid (int, optional): Specific provider doctor ID to filter results
     
     Returns:
-        JSON response containing service names, prices, doctor information, and clinic details
+        Structured Markdown containing service names, prices, doctor information, and clinic details
     """
     if not clinicid:
         raise ValueError("Clinicid is required")
         
-    # Build request parameters
-    params = {}
-    params["clinicid"] = clinicid
-    if providerid is not None:
-        params["providerId"] = providerid 
-        
-    
-    return await fetch_text(
-        settings.service_price_url,
-        auth=settings.auth,
-        params=params,
-    )
+    raw = await _fetch_service_price(clinicid, providerid)
+    try:
+        data = json.loads(raw)
+        return _format_mcp_response(data, "Service Pricing")
+    except Exception:
+        return raw
 
 
 # ------------------------------------------------------------------------------
@@ -835,18 +916,17 @@ async def match_clinic_hybrid(
     clinics = _parse_and_preprocess_clinics(payload["data"])
 
     # ------------------------------------------------------------------
-    # Special-case: generic "الجراحة/جراحة" should resolve to base "جراحه"
+    # Generalized bypass for exact clinic matches
     # ------------------------------------------------------------------
-    # Users often ask: "عيادة الجراحة" as a generic clinic (one-word), and the
-    # matcher correctly finds multiple prefixes (جراحه تجميل, جراحه مخ..., ...).
-    # For this specific clinic only, we want to skip disambiguation and pick the
-    # base clinic record whose tokens are exactly ["جراحه"].
+    # Users often ask: "عيادة الجراحة" or "عيادة الأطفال" as a generic clinic, and the
+    # matcher correctly finds multiple prefixes (جراحه تجميل, جراحه مخ, او اطفال جراحة, الخ...).
+    # If the user's input (modulo noise words) exactly matches the tokens of a single
+    # base clinic record, we want to skip disambiguation and pick it.
     #
     # Important: apply the rule on *tokenized clinic text*, not on the full
     # user sentence length. This also covers phrases like "الجراحة الاسبوع ده"
     # if the upstream extraction mistakenly includes time context words.
-    _SURGERY_TOKEN = "جراحه"
-    _SURGERY_CONTEXT_TOKENS = {
+    _CONTEXT_TOKENS = {
         # Common time/context tails that might leak into clinic text
         "اسبوع",
         "شهر",
@@ -859,10 +939,11 @@ async def match_clinic_hybrid(
         "قادم",
         "جاي",
     }
-    core_tokens = [t for t in query_tokens if t not in _SURGERY_CONTEXT_TOKENS]
-    if core_tokens == [_SURGERY_TOKEN]:
-        base = next((c for c in clinics if c.tokens == [_SURGERY_TOKEN]), None)
-        if base is not None:
+    core_tokens = [t for t in query_tokens if t not in _CONTEXT_TOKENS]
+    if len(core_tokens) > 0:
+        exact_matches = [c for c in clinics if c.tokens == core_tokens]
+        if exact_matches:
+            base = exact_matches[0]
             forced = ClinicMatch(
                 clinic_id=base.clinic_id,
                 clinic_name=base.clinic_name,
@@ -870,7 +951,7 @@ async def match_clinic_hybrid(
                 token_overlap=1.0,
                 fuzzy_name_score=1.0,
                 order_score=1.0,
-                matched_tokens=[_SURGERY_TOKEN],
+                matched_tokens=core_tokens,
             )
             response = ClinicMatchResponse(
                 status=MatchStatus.UNAMBIGUOUS_MATCH,
@@ -905,7 +986,7 @@ def _parse_int(value: Optional[str], field: str) -> int:
 
 @mcp.custom_route("/providers", methods=["GET"])
 async def providers_route(_request: Request) -> Response:
-    data = await get_clinic_provider_list()
+    data = await _fetch_clinic_provider_list()
     return _json_response_from_text(data)
 
 
@@ -960,7 +1041,7 @@ async def providers_schedule_route(request: Request) -> Response:
     except ValueError:
         return JSONResponse({"error": "providerId must be an integer"}, status_code=400)
 
-    data = await get_clinic_provider_schedule(
+    data = await _fetch_clinic_provider_schedule(
         clinicid=clinic_id,
         dateFrom=date_from,
         dateTo=date_to,
@@ -983,7 +1064,7 @@ async def providers_pricing_route(request: Request) -> Response:
     except ValueError:
         return JSONResponse({"error": "providerid must be an integer"}, status_code=400)
 
-    data = await get_service_price(
+    data = await _fetch_service_price(
         clinicid=clinic_id,
         providerid=provider_id,
     )
