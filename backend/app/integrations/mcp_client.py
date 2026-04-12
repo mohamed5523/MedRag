@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import re
+import os
+import time
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urljoin
@@ -16,6 +18,27 @@ from app.core.settings import MCPSettings, get_mcp_settings
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.mcp_client")
+
+_DEBUG_LOG_PATH = "/home/morad/Projects/heal-query-hub/.cursor/debug-3bb97d.log"
+
+
+def _debug_log(*, run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # region agent log
+    try:
+        payload = {
+            "sessionId": "3bb97d",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+    # endregion agent log
 
 DAY_NAME_TO_ID = {
     "saturday": 1,
@@ -249,6 +272,8 @@ class ScheduleSlot(MCPBaseModel):
     day_name: Optional[str] = None
     shift_start: Optional[str] = None
     shift_end: Optional[str] = None
+    is_excused: bool = False
+    slot_status: Optional[str] = None
     notes: Optional[str] = None
     raw: Dict[str, Any] = Field(default_factory=dict)
 
@@ -287,6 +312,36 @@ class ScheduleSlot(MCPBaseModel):
 
         notes = _pick(raw, ["notes", "remarks"])
 
+        # Check for explicit excuse/cancelled flags from the API
+        is_excused_flag = _pick(raw, ["is_excused", "IsExcuse", "isExcuse", "excused", "Excused", "is_cancelled", "IsCancelled"])
+        is_excused_val = str(is_excused_flag).casefold() if is_excused_flag is not None else ""
+        
+        is_excused = is_excused_val in ("true", "1", "yes", "معتذر", "cancelled")
+        slot_status = None
+        
+        # Check explicit status fields
+        explicit_status = str(_pick(raw, ["status", "Status", "type", "Type", "label", "Label"]) or "")
+        if "بديل" in explicit_status:
+            slot_status = "بديل"
+        elif "استثناء" in explicit_status:
+            slot_status = "استثناء"
+        elif "معتذر" in explicit_status:
+            slot_status = "معتذر"
+            is_excused = True
+            
+        # Also infer from schedule text if the shift time says "معتذر", "إجازة", etc.
+        for text_field in [shift_start, shift_end, notes, explicit_status, _pick(raw, ["shifttime", "shiftTime", "shift_time"])]:
+            if isinstance(text_field, str):
+                lower_text = text_field.casefold()
+                if not slot_status and ("بديل" in lower_text):
+                    slot_status = "بديل"
+                if not slot_status and ("استثناء" in lower_text):
+                    slot_status = "استثناء"
+                if "معتذر" in lower_text or "اجازة" in lower_text or "اجازه" in lower_text or "مغادر" in lower_text:
+                    is_excused = True
+                    if not slot_status:
+                        slot_status = "معتذر"
+
         return {
             "clinic_id": clinic_id,
             "provider_id": provider_id,
@@ -294,6 +349,8 @@ class ScheduleSlot(MCPBaseModel):
             "day_name": day_name,
             "shift_start": shift_start,
             "shift_end": shift_end,
+            "is_excused": is_excused,
+            "slot_status": slot_status,
             "notes": notes,
             "raw": raw,
         }
@@ -302,6 +359,7 @@ class ScheduleSlot(MCPBaseModel):
 class ServicePriceRecord(MCPBaseModel):
     clinic_id: Optional[int] = None
     provider_id: Optional[int] = None
+    doctor_name: Optional[str] = None
     service_name_ar: Optional[str] = None
     service_name_en: Optional[str] = None
     price: Optional[float] = None
@@ -324,6 +382,10 @@ class ServicePriceRecord(MCPBaseModel):
             ),
             "provider_id": _coerce_int(
                 _pick(raw, ["provider_id", "providerid", "providerId", "ProviderId"])
+            ),
+            "doctor_name": _pick(
+                raw,
+                ["doctor_name", "DoctorName", "provider_name", "ProviderName"],
             ),
             # Prefer Arabic name; fall back to generic ServiceName if that's all we have
             "service_name_ar": _pick(
@@ -763,6 +825,18 @@ class MCPClient:
 
         for attempt in range(1, attempts + 1):
             try:
+                _debug_log(
+                    run_id=os.getenv("DEBUG_RUN_ID", "pre-fix"),
+                    hypothesis_id="H2-mcp-fetch",
+                    location="backend/app/integrations/mcp_client.py:MCPClient._request_json.request",
+                    message="MCP HTTP GET attempt",
+                    data={
+                        "url": url,
+                        "params": params or {},
+                        "attempt": attempt,
+                        "attempts_total": attempts,
+                    },
+                )
                 response = await self._http_client.get(url, params=params, headers=headers, auth=auth)
                 response.raise_for_status()
                 span and span.add_event(
@@ -772,17 +846,49 @@ class MCPClient:
                         "attempt": attempt,
                     },
                 )
+                _debug_log(
+                    run_id=os.getenv("DEBUG_RUN_ID", "pre-fix"),
+                    hypothesis_id="H2-mcp-fetch",
+                    location="backend/app/integrations/mcp_client.py:MCPClient._request_json.success",
+                    message="MCP HTTP GET success",
+                    data={
+                        "url": url,
+                        "status_code": getattr(response, "status_code", None),
+                    },
+                )
                 return response.json()
 
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
-                logger.warning("MCP request failed (%s/%s): %s", attempt, attempts, exc)
+                logger.warning(
+                    "MCP request failed (%s/%s): url=%s params=%s error=%s",
+                    attempt,
+                    attempts,
+                    url,
+                    params,
+                    exc,
+                )
+                _debug_log(
+                    run_id=os.getenv("DEBUG_RUN_ID", "pre-fix"),
+                    hypothesis_id="H2-mcp-fetch",
+                    location="backend/app/integrations/mcp_client.py:MCPClient._request_json.error",
+                    message="MCP HTTP GET error",
+                    data={
+                        "url": url,
+                        "params": params or {},
+                        "attempt": attempt,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:300],
+                    },
+                )
                 span and span.record_exception(exc)
                 if attempt >= attempts:
                     break
                 await asyncio.sleep(delay * attempt)
 
-        raise MCPClientError(f"MCP request failed after {attempts} attempts: {last_error}") from last_error
+        raise MCPClientError(
+            f"MCP request failed after {attempts} attempts (url={url}, params={params}): {last_error}"
+        ) from last_error
 
     def _build_url(self, override: Optional[str], path: str) -> str:
         """Build a full URL from an optional full-URL override and a path.

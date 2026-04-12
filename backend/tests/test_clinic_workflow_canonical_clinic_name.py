@@ -36,7 +36,7 @@ class FakeMCPClientCanonicalClinic:
             slots=[
                 ScheduleSlot(
                     clinic_id=clinic_id,
-                    provider_id=provider_id,
+                    provider_id=8001,
                     day_id=getattr(self, "_expected_day_id", 1),
                     day_name="Tuesday",
                     shift_start="09:00",

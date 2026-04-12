@@ -1,7 +1,30 @@
+"""
+clinic_workflow.py — Intelligent MCP Orchestration Engine
+==========================================================
+Handles ANY Egyptian Arabic clinic-related question by:
+
+1. Understanding the REAL intent (price / availability / who-is-present /
+   combined / list-doctors / booking) from RouteDecision
+2. Resolving clinic & doctor identifiers via MCP with smart fallbacks
+3. Running MCP tool calls in parallel where possible
+4. Merging results into rich LLM-ready context
+5. Generating a warm, natural Arabic answer via QAEngine
+
+Key improvements over the old version:
+- ask_price_and_availability: fetches price + schedule for the CORRECT date
+- _handle_pricing_with_schedule: uses _infer_date_range (not hardcoded today)
+- who_is_present: properly preserved alongside price in multi-intent
+- Payment questions (تقسيط/كاش): treated as ask_price
+- All clinic/doctor inferences use RouteDecision.enriched_* fields first
+  (from the LLM router) before falling back to regex heuristics
+"""
+
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -12,7 +35,7 @@ from pydantic import BaseModel, Field
 
 try:
     from langchain_core.documents import Document
-except Exception:  # pragma: no cover - fallback for older langchain versions
+except Exception:
     try:
         from langchain.schema import Document  # type: ignore
     except Exception:
@@ -21,6 +44,12 @@ except Exception:  # pragma: no cover - fallback for older langchain versions
 from app.core.intent_router import RouteDecision, RouteMode
 from app.core.qa_engine import QAEngine
 from app.core.state_manager import ConversationState
+from app.core.radiology_knowledge import (
+    get_radiology_context,
+    get_emergency_radiology_context,
+    is_radiology_question,
+    is_emergency_radiology,
+)
 from app.integrations.mcp_client import (
     ClinicMatchResponse,
     DoctorMatchResult,
@@ -38,47 +67,12 @@ from app.integrations.mcp_client import (
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.clinic_workflow")
 
-CLINIC_SPECIALTY_WORDS = {
-    "أطفال", "اطفال",
-    "باطنة", "باطنه", "باطنه",
-    "عظام",
-    "عيون",
-    "أسنان", "اسنان",
-    "جلدية", "جلديه",
-    "جراحة", "جراحه",
-    "أعصاب", "اعصاب",
-    "قلب",
-    "صدر",
-    "مسالك",
-    "نسا",
-    "توليد",
-    "أنف", "انف",
-    "أذن", "اذن",
-    "حنجرة", "حنجره",
-    "نفسية", "نفسيه",
-    "سكر",
-    "تجميل",
-    "مخ",
-    "كبد",
-    "كلى",
-    "رمد",
-    "طوارئ",
-    "حضانة", "حضانه",
-    "تخدير",
-    "علاج طبيعي",
-    "مناظير",
-    "أورام", "اورام",
-    "مخ وأعصاب", "مخ واعصاب",
-    "حميات",
-    "أمراض", "امراض",
-    "بولية", "بوليه",
-    "عصبية", "عصبيه",
-    "جلد",
-}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Exceptions & Result Models
+# ─────────────────────────────────────────────────────────────────────────────
 
 class MCPWorkflowError(Exception):
-    """Raised when the clinic workflow cannot be completed."""
-
     def __init__(self, message: str, *, reason: str, data: Optional[Dict[str, Any]] = None):
         super().__init__(message)
         self.reason = reason
@@ -96,14 +90,503 @@ class ClinicWorkflowResult(BaseModel):
     tool_audit: List[ToolAuditEntry] = Field(default_factory=list)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Clinic synonym / normalization maps
+# (kept minimal — LLM router now handles most normalization)
+# ─────────────────────────────────────────────────────────────────────────────
+
+CLINIC_SYNONYMS: Dict[str, str] = {
+    "عيون": "رمد", "العيون": "الرمد", "نظر": "رمد",
+    "باطني": "باطنة", "باطنيه": "باطنة", "باطنية": "باطنة", "باطن": "باطنة",
+    "نسائية": "نسا وتوليد", "نساء": "نسا وتوليد", "نسا": "نسا وتوليد",
+    "ولادة": "نسا وتوليد", "نسا وولادة": "نسا وتوليد", "نساء وتوليد": "نسا وتوليد",
+    "اسنان": "أسنان", "سنان": "أسنان",
+    "أعصاب": "امراض مخ واعصاب", "اعصاب": "امراض مخ واعصاب",
+    "أطفال": "اطفال",
+    "رنين": "اشعه", "مرنانة": "اشعه", "مرنانه": "اشعه", "mri": "اشعه",
+    "ماموجرام": "اشعه", "mammogram": "اشعه",
+    "ديكسا": "اشعه", "dexa": "اشعه",
+    "بت سكان": "اشعه مقطعيه", "pet scan": "اشعه مقطعيه",
+    "إكس راي": "اشعه عاديه", "x-ray": "اشعه عاديه", "xray": "اشعه عاديه",
+    "دوبلر": "اشعه تلفزيونيه", "doppler": "اشعه تلفزيونيه",
+    "سونار": "اشعه تلفزيونيه", "تلفزيوني": "اشعه تلفزيونيه",
+    "سكانر": "اشعه مقطعيه", "مقطعي": "اشعه مقطعيه", "مقطعية": "اشعه مقطعيه",
+    "بانوراما": "أسنان", "باناراما": "أسنان", "سيفالوميتريك": "أسنان",
+    "تجميل": "جراحه تجميل", "بوتوكس": "جراحه تجميل", "فيلر": "جراحه تجميل",
+    "نفسية": "نفسيه وعصبيه", "نفسيه": "نفسيه وعصبيه", "طب نفسي": "نفسيه وعصبيه",
+    "علاج طبيعي": "علاج طبيعى", "تأهيل": "علاج طبيعى",
+    "أورام": "اورام", "سرطان": "اورام",
+    "مسالك": "مسالك بوليه", "مسالك بولية": "مسالك بوليه",
+    "صدر": "صدريه",
+    "جراحة": "جراحه",
+}
+
+# Hardcoded clinic ID map — bypasses fuzzy matching for well-known specialties
+_HARDCODED_CLINIC_IDS: Dict[str, int] = {
+    "عظام": 1119,
+    "أسنان": 1108, "اسنان": 1108,
+    "رمد": 1116, "عيون": 1116,
+    "أطفال": 1109, "اطفال": 1109,
+    "باطنة": 1087, "باطنه": 1087,
+    "جراحة": 1097, "جراحه": 1097,
+    "أنف وأذن وحنجرة": 1110,
+    "جلدية": 1115, "جلديه": 1115,
+    "نسا وتوليد": 1122, "نسا": 1122,
+    "قلب": 1090,
+    "صدر": 1118, "صدريه": 1118,
+    "أعصاب": 1106, "اعصاب": 1106,
+    "امراض مخ واعصاب": 1106,
+    "مسالك بولية": 1121, "مسالك بوليه": 1121,
+    "سكر وغدد صماء": 1136,
+    "نفسية": 1105, "نفسيه": 1105, "نفسيه وعصبيه": 1105,
+    "علاج طبيعي": 1120, "علاج طبيعى": 1120,
+    "أورام": 1111, "اورام": 1111,
+    "جراحه تجميل": 1098,
+    "كبد": 1092,
+    "اشعه": 1102,
+    "اشعه مقطعيه": 1104,
+    "اشعه تلفزيونيه": 1102,
+    "اشعه عاديه": 1,
+}
+
+
+def _normalize_clinic_name(name: Optional[str]) -> Optional[str]:
+    """Normalize clinic name to canonical form via synonym map."""
+    if not name:
+        return name
+    key = name.strip()
+    for prefix in ("عيادة ", "عياده ", "دكتور "):
+        if key.startswith(prefix):
+            key = key[len(prefix):].strip()
+            break
+    for candidate in (key, key.replace("ة", "ه"), key.replace("ه", "ة")):
+        if candidate in CLINIC_SYNONYMS:
+            return CLINIC_SYNONYMS[candidate]
+    return name.strip()
+
+
+def _hardcoded_clinic_id(name: str) -> Optional[int]:
+    """Fast lookup for well-known clinic specialties."""
+    key = (name or "").strip()
+    for prefix in ("عيادة ", "عياده "):
+        if key.startswith(prefix):
+            key = key[len(prefix):].strip()
+            break
+    for candidate in (key, key.replace("ة", "ه"), key.replace("ه", "ة")):
+        if candidate in _HARDCODED_CLINIC_IDS:
+            return _HARDCODED_CLINIC_IDS[candidate]
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Date helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_AR_WEEKDAY_TO_EN = {
+    "السبت": "saturday", "سبت": "saturday",
+    "الأحد": "sunday", "الاحد": "sunday", "احد": "sunday",
+    "الاثنين": "monday", "الاتنين": "monday", "اثنين": "monday",
+    "الثلاثاء": "tuesday", "التلات": "tuesday", "ثلاثاء": "tuesday",
+    "الأربعاء": "wednesday", "الاربعاء": "wednesday", "الأربع": "wednesday",
+    "الخميس": "thursday", "خميس": "thursday",
+    "الجمعة": "friday", "جمعه": "friday", "جمعة": "friday",
+}
+
+_PY_WEEKDAY = {
+    "saturday": 5, "sunday": 6, "monday": 0,
+    "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4,
+}
+
+
+def _cairo_now() -> datetime:
+    return datetime.now(timezone(timedelta(hours=2)))
+
+
+def _infer_date_range(
+    question: str,
+    *,
+    now_dt: Optional[datetime] = None,
+    date_hint: Optional[str] = None,
+) -> Tuple[str, str, bool, bool]:
+    """
+    Returns (date_from, date_to, is_specific_day, is_today) as DD/MM/YYYY strings.
+
+    Accepts an explicit date_hint from the LLM router ("today" | "tomorrow" |
+    "saturday" | ...) which takes priority over keyword scanning.
+    """
+    base = now_dt or _cairo_now()
+    q = (question or "").casefold()
+
+    def _fmt(dt: datetime) -> str:
+        return dt.strftime("%d/%m/%Y")
+
+    # ── LLM-provided date hint (highest priority) ─────────────────────────────
+    if date_hint:
+        hint = date_hint.lower().strip()
+        if hint in ("today", "النهارده", "اليوم"):
+            d = _fmt(base)
+            return d, d, True, True
+        if hint in ("tomorrow", "بكرة", "بكره", "غدا"):
+            t = base + timedelta(days=1)
+            d = _fmt(t)
+            return d, d, True, False
+        # Weekday name
+        for ar, en in _AR_WEEKDAY_TO_EN.items():
+            if hint in (en, ar):
+                days_ahead = (_PY_WEEKDAY[en] - base.weekday()) % 7
+                target = base + timedelta(days=days_ahead)
+                d = _fmt(target)
+                return d, d, True, False
+
+    # ── Keyword scan fallback ─────────────────────────────────────────────────
+    if any(tok in q for tok in ["النهارده", "نهارده", "اليوم", "دلوقتي", "الآن", "حاليا"]):
+        d = _fmt(base)
+        return d, d, True, True
+
+    if any(tok in q for tok in ["بكره", "بكرة", "غدا", "غداً"]):
+        t = base + timedelta(days=1)
+        d = _fmt(t)
+        return d, d, True, False
+
+    for ar, en in _AR_WEEKDAY_TO_EN.items():
+        if ar in q:
+            days_ahead = (_PY_WEEKDAY[en] - base.weekday()) % 7
+            target = base + timedelta(days=days_ahead)
+            d = _fmt(target)
+            return d, d, True, False
+
+    # ── No specific day → full week ───────────────────────────────────────────
+    date_from = _fmt(base)
+    date_to = _fmt(base + timedelta(days=6))
+    return date_from, date_to, False, False
+
+
+def _infer_target_day_id(question: str, *, now_dt: Optional[datetime] = None, date_hint: Optional[str] = None) -> int:
+    """Return MCP day_id (1=Sat … 7=Fri)."""
+    base = now_dt or _cairo_now()
+    q = (question or "").casefold()
+
+    if date_hint:
+        hint = date_hint.lower()
+        if hint in ("today", "النهارده", "اليوم"):
+            return DAY_NAME_TO_ID[base.strftime("%A").lower()]
+        if hint in ("tomorrow", "بكرة", "بكره"):
+            t = base + timedelta(days=1)
+            return DAY_NAME_TO_ID[t.strftime("%A").lower()]
+        for ar, en in _AR_WEEKDAY_TO_EN.items():
+            if hint in (en, ar):
+                return DAY_NAME_TO_ID[en]
+
+    if any(tok in q for tok in ["بكره", "بكرة", "غدا"]):
+        return DAY_NAME_TO_ID[(base + timedelta(days=1)).strftime("%A").lower()]
+    if any(tok in q for tok in ["النهارده", "نهارده", "اليوم", "دلوقتي"]):
+        return DAY_NAME_TO_ID[base.strftime("%A").lower()]
+    for ar, en in _AR_WEEKDAY_TO_EN.items():
+        if ar in q:
+            return DAY_NAME_TO_ID[en]
+    return DAY_NAME_TO_ID[base.strftime("%A").lower()]
+
+
+def _time_str_to_minutes(t: str) -> int:
+    if not t:
+        return 9999
+    is_pm = any(m in t for m in ["مساء", "مساءً", "PM", "pm", "م"])
+    is_am = any(m in t for m in ["صباح", "صباحًا", "AM", "am", "ص"])
+    m = re.search(r"(\d{1,2})[:.](\d{2})", t)
+    if not m:
+        return 9999
+    h, mn = int(m.group(1)), int(m.group(2))
+    if h >= 13:
+        return h * 60 + mn
+    if is_pm and h != 12:
+        h += 12
+    elif is_am and h == 12:
+        h = 0
+    return h * 60 + mn
+
+
+def _safe_parse_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        if value.strip().lower() in ("", "none", "null"):
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Formatting helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _normalize_ampm(value: str) -> str:
+    if not value:
+        return value
+    out = value
+    out = re.sub(r"(?i)\bA\.?M\.?\b", "صباحًا", out)
+    out = re.sub(r"(?i)\bP\.?M\.?\b", "مساءً", out)
+    out = re.sub(r"(\d{1,2}[:.]\d{2})\s*ص\b", r"\1 صباحًا", out)
+    out = re.sub(r"(\d{1,2}[:.]\d{2})\s*م\b", r"\1 مساءً", out)
+    out = re.sub(r"صباح(?!\u064b)(?:ا|اً|ً|ًا|)\b", "صباحًا", out)
+    out = re.sub(r"مساء(?!\u064c)(?:ا|اً|ً|ًا|)\b", "مساءً", out)
+    return out
+
+
+def _format_price_context(
+    price_response: ServicePriceResponse,
+    provider_entry: Optional[ProviderRecord],
+    question: Optional[str] = None,
+) -> str:
+    """Format service prices into LLM-friendly Arabic context."""
+    clinic = ""
+    if provider_entry:
+        clinic = provider_entry.clinic_name_ar or provider_entry.clinic_name_en or ""
+    doctor = ""
+    if provider_entry:
+        doctor = provider_entry.provider_name_ar or provider_entry.provider_name_en or ""
+
+    lines = []
+    if clinic:
+        lines.append(f"أسعار {clinic}:")
+    elif doctor:
+        lines.append(f"أسعار الدكتور {doctor}:")
+    else:
+        lines.append("الأسعار المتاحة:")
+
+    valid = [s for s in price_response.services if s.price is not None]
+
+    # Filter by doctor name if we have one
+    if doctor:
+        target = doctor.casefold().replace(" ", "")
+        doctor_specific = [
+            s for s in valid
+            if s.doctor_name and target in str(s.doctor_name).casefold().replace(" ", "")
+        ]
+        if doctor_specific:
+            valid = doctor_specific
+
+    if not valid:
+        lines.append("- السعر غير متوفر حالياً في النظام.")
+    else:
+        for s in valid:
+            name = s.service_name_ar or s.service_name_en or "كشف"
+            price = f"{s.price:.2f}"
+            currency = s.currency or "جنيه"
+            doc_label = f" — {s.doctor_name}" if getattr(s, "doctor_name", None) else ""
+            lines.append(f"- {name}{doc_label}: {price} {currency}")
+
+    return "\n".join(lines)
+
+
+def _format_schedule_context(
+    response: ProviderScheduleResponse,
+    provider_entry: Optional[ProviderRecord],
+) -> str:
+    """Format a schedule into readable Arabic context."""
+    doctor = ""
+    clinic = ""
+    if provider_entry:
+        doctor = provider_entry.provider_name_ar or provider_entry.provider_name_en or ""
+        clinic = provider_entry.clinic_name_ar or provider_entry.clinic_name_en or ""
+
+    lines = []
+    if clinic and doctor:
+        lines.append(f"مواعيد الدكتور {doctor} في {clinic}:")
+    elif clinic:
+        lines.append(f"مواعيد {clinic}:")
+    elif doctor:
+        lines.append(f"مواعيد الدكتور {doctor}:")
+    else:
+        lines.append("المواعيد المتاحة:")
+
+    grouped: Dict[str, List[str]] = defaultdict(list)
+    for slot in response.slots:
+        day = slot.day_name or f"اليوم #{slot.day_id}"
+        start = _normalize_ampm(slot.shift_start or "غير محدد")
+        end = _normalize_ampm(slot.shift_end or "غير محدد")
+        entry = f"{start} → {end}"
+        status = getattr(slot, "slot_status", None)
+        if status:
+            entry += f" ({status})"
+        elif getattr(slot, "is_excused", False):
+            entry += " (معتذر)"
+        grouped[day].append(entry)
+
+    for day, entries in grouped.items():
+        lines.append(f"\n{day}:")
+        for e in entries:
+            lines.append(f"  - {e}")
+
+    return "\n".join(lines)
+
+
+def _format_multi_doctor_schedule(
+    clinic_name: str,
+    schedules: List[Tuple[ProviderRecord, ProviderScheduleResponse]],
+) -> str:
+    """Format all providers' schedules sorted by earliest shift start."""
+    processed = []
+    for provider, response in schedules:
+        grouped: Dict[str, List[Tuple[str, str, bool, Optional[str]]]] = defaultdict(list)
+        earliest = 9999
+        for slot in response.slots:
+            day = slot.day_name or f"اليوم #{slot.day_id}"
+            start = _normalize_ampm(slot.shift_start or "")
+            end = _normalize_ampm(slot.shift_end or "")
+            if start and end:
+                is_exc = getattr(slot, "is_excused", False)
+                status = getattr(slot, "slot_status", None)
+                grouped[day].append((start, end, is_exc, status))
+                t = _time_str_to_minutes(slot.shift_start or start)
+                if t < earliest:
+                    earliest = t
+        processed.append((provider, grouped, earliest))
+
+    processed.sort(key=lambda x: x[2])
+
+    lines = [f"مواعيد دكاترة {clinic_name} (مرتبة حسب الوقت):", ""]
+    for provider, grouped, _ in processed:
+        name = provider.provider_name_ar or provider.provider_name_en or "دكتور"
+        lines.append(f"دكتور {name}")
+        all_slots = [(s, e, ex, st) for day_slots in grouped.values() for s, e, ex, st in day_slots]
+        if len(all_slots) == 1:
+            s, e, ex, st = all_slots[0]
+            label = f" ({st})" if st else (" (معتذر)" if ex else "")
+            lines.append(f"  - من {s} لحد {e}{label}")
+        else:
+            labels = ["الفترة الأولى", "الفترة التانية", "الفترة الثالثة"]
+            for i, (s, e, ex, st) in enumerate(all_slots):
+                lbl = labels[i] if i < len(labels) else f"الفترة {i+1}"
+                status_str = f" ({st})" if st else (" (معتذر)" if ex else "")
+                lines.append(f"  - {lbl}: من {s} لحد {e}{status_str}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _format_combined_price_schedule(
+    clinic_name: str,
+    doctors: List[Tuple[ProviderRecord, List[str], Optional[ServicePriceResponse]]],
+    question: Optional[str] = None,
+) -> str:
+    """Format a combined per-doctor block showing schedule + price."""
+    lines = [
+        f"بيانات دكاترة {clinic_name} — المواعيد والأسعار:",
+        "",
+        "[تعليمات: اعرض كل دكتور في فقرة منفصلة مع مواعيده وسعر الكشف]",
+        "",
+    ]
+    for provider, slot_strs, price_resp in doctors:
+        name = provider.provider_name_ar or provider.provider_name_en or "دكتور"
+        lines.append(f"دكتور {name}")
+
+        if slot_strs:
+            if len(slot_strs) == 1:
+                lines.append(f"  - المواعيد: من {slot_strs[0].replace(' → ', ' لحد ')}")
+            else:
+                labels = ["الفترة الأولى", "الفترة التانية", "الفترة الثالثة"]
+                for i, slot in enumerate(slot_strs):
+                    lbl = labels[i] if i < len(labels) else f"الفترة {i+1}"
+                    lines.append(f"  - {lbl}: من {slot.replace(' → ', ' لحد ')}")
+        else:
+            lines.append("  - المواعيد: غير متاح في هذا اليوم")
+
+        if price_resp:
+            valid = [s for s in price_resp.services if s.price is not None]
+            target_ar = (provider.provider_name_ar or "").casefold().replace(" ", "")
+            target_en = (provider.provider_name_en or "").casefold().replace(" ", "")
+            if target_ar or target_en:
+                doc_specific = [
+                    s for s in valid
+                    if s.doctor_name and (
+                        (target_ar and target_ar in str(s.doctor_name).casefold().replace(" ", "")) or
+                        (target_en and target_en in str(s.doctor_name).casefold().replace(" ", ""))
+                    )
+                ]
+                if doc_specific:
+                    valid = doc_specific
+            if valid:
+                for s in valid:
+                    sname = s.service_name_ar or s.service_name_en or "كشف"
+                    lines.append(f"  - {sname}: {s.price:.2f} {s.currency or 'جنيه'}")
+            else:
+                lines.append("  - السعر: غير متوفر في النظام")
+        else:
+            lines.append("  - السعر: غير متوفر في النظام")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _format_who_is_present(
+    clinic_label: str,
+    day_id: int,
+    present: List[Tuple[str, List[str]]],
+) -> str:
+    day_names = {1: "السبت", 2: "الأحد", 3: "الاثنين", 4: "الثلاثاء",
+                 5: "الأربعاء", 6: "الخميس", 7: "الجمعة"}
+    day = day_names.get(day_id, "اليوم")
+    lines = [f"الدكاترة الموجودين في {clinic_label} — {day}:", ""]
+    for name, times in present:
+        lines.append(f"دكتور {name}")
+        for t in times:
+            lines.append(f"  - {t}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_provider_list(provider_list: ProviderListPayload) -> str:
+    lines = ["قائمة الدكاترة المتاحة:"]
+    for r in provider_list.providers:
+        doctor = r.provider_name_ar or r.provider_name_en or "دكتور"
+        clinic = r.clinic_name_ar or r.clinic_name_en or "عيادة"
+        specialty = r.specialty or ""
+        suffix = f" — تخصص: {specialty}" if specialty else ""
+        lines.append(f"- {doctor} في {clinic}{suffix}")
+    return "\n".join(lines)
+
+
+def _filter_provider_list_by_clinic_id(
+    provider_list: ProviderListPayload, clinic_id: int
+) -> ProviderListPayload:
+    filtered = [p for p in provider_list.providers if p.clinic_id == clinic_id]
+    return ProviderListPayload(providers=filtered)
+
+
+def _slot_strs_from_slots(slots: list) -> List[str]:
+    result = []
+    for slot in slots:
+        start = _normalize_ampm(slot.shift_start or "غير محدد")
+        end = _normalize_ampm(slot.shift_end or "غير محدد")
+        status = getattr(slot, "slot_status", None)
+        label = f" ({status})" if status else (" (معتذر)" if getattr(slot, "is_excused", False) else "")
+        result.append(f"{start} → {end}{label}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main Workflow Service
+# ─────────────────────────────────────────────────────────────────────────────
+
 class ClinicWorkflowService:
-    """Coordinates multi-step MCP tool usage and prepares LLM-friendly context."""
+    """
+    Coordinates MCP tool calls and produces LLM-ready context for any
+    Egyptian Arabic clinic question.
+    """
 
     def __init__(self, mcp_client: Optional[MCPClient] = None):
         self._client = mcp_client or MCPClient()
 
     async def aclose(self):
-        """Close the underlying MCP client."""
         await self._client.aclose()
 
     async def run(
@@ -117,104 +600,81 @@ class ClinicWorkflowService:
         user_gender: str = "male",
     ) -> ClinicWorkflowResult:
         if decision.mode != RouteMode.MCP:
-            raise ValueError("ClinicWorkflowService can only execute MCP decisions.")
+            raise ValueError("ClinicWorkflowService only handles MCP decisions.")
 
         with tracer.start_as_current_span("clinic_workflow.run") as span:
             span.set_attribute("workflow.intent", decision.intent)
-            span.set_attribute("workflow.requires_provider_resolution", decision.requires_provider_resolution)
-            span.set_attribute("workflow.tool_plan.count", len(decision.tool_sequence))
+            span.set_attribute("workflow.question", question[:200])
 
             tool_audit: List[ToolAuditEntry] = []
+            docs: List[Document] = []
 
             try:
+                # ── Determine the effective date hint ─────────────────────────
+                date_hint = decision.enriched_date_hint
+                now_dt = _cairo_now()
                 time_context = qa_engine.build_time_context(question)
-                now_dt = time_context.get("now_dt")
-                effective_primary_intent = (
-                    "who_is_present" if _is_who_is_present_query(question) else decision.intent
-                )
-                requested_intents = _detect_requested_intents(
-                    question,
-                    primary_intent=effective_primary_intent,
-                    max_intents=3,
-                )
-                span.set_attribute("workflow.requested_intents", ",".join(requested_intents))
-                span.set_attribute("workflow.effective_primary_intent", effective_primary_intent)
 
-                docs: List[Document] = []
+                # ── Override clinic/doctor from LLM enrichment if state lacks them ─
+                self._apply_enrichment(state, decision)
 
-                # Preserve existing behavior for single-intent queries (errors should raise).
-                if len(requested_intents) == 1:
-                    intent = requested_intents[0]
-                    if intent == "who_is_present":
-                        docs, _ = await self._handle_who_is_present(
-                            state, tool_audit, question, now_dt=now_dt
-                        )
-                    elif intent == "ask_price":
-                        docs, _ = await self._handle_pricing(state, tool_audit, question)
-                    elif intent in {"check_availability", "book_appointment"}:
-                        docs, _ = await self._handle_schedule(state, tool_audit, question)
-                    elif intent == "list_doctors":
-                        docs, _ = await self._handle_list_doctors(state, tool_audit)
-                    else:
-                        raise MCPWorkflowError(
-                            f"Intent {intent} is not supported by the clinic workflow.",
-                            reason="intent_not_supported",
-                        )
-                else:
-                    # Multi-intent execution: run up to 3 intent handlers and merge contexts into one QA call.
-                    # If an intent requires disambiguation, bubble up the MCPWorkflowError so chat.py can store pending actions.
-                    disambiguation_reasons = {
-                        "provider_ambiguous",
-                        "provider_low_confidence",
-                        "clinic_ambiguous",
-                        "provider_clinic_mismatch",
-                    }
+                # ── Dispatch by intent ─────────────────────────────────────────
+                intent = decision.intent
+                all_intents = decision.all_intents or [intent]
 
-                    for intent in requested_intents:
-                        try:
-                            if intent == "who_is_present":
-                                part_docs, _ = await self._handle_who_is_present(
-                                    state, tool_audit, question, now_dt=now_dt
-                                )
-                            elif intent == "ask_price":
-                                part_docs, _ = await self._handle_pricing(state, tool_audit, question)
-                            elif intent in {"check_availability", "book_appointment"}:
-                                part_docs, _ = await self._handle_schedule(state, tool_audit, question)
-                            elif intent == "list_doctors":
-                                part_docs, _ = await self._handle_list_doctors(state, tool_audit)
-                            else:
-                                raise MCPWorkflowError(
-                                    f"Intent {intent} is not supported by the clinic workflow.",
-                                    reason="intent_not_supported",
-                                )
-                            docs.extend(part_docs)
-                        except MCPWorkflowError as exc:
-                            if exc.reason in disambiguation_reasons:
-                                raise
-                            # Keep the workflow responsive: partial answer for other intents is better than failing the whole turn.
-                            docs.append(
-                                Document(
-                                    page_content=f"[{intent}] {str(exc)}",
-                                    metadata={"source": f"mcp.error.{intent}", "reason": exc.reason},
-                                )
-                            )
-            except MCPWorkflowError as exc:
-                span.record_exception(exc)
-                span.set_attribute("workflow.failure_reason", exc.reason)
-                raise
-            # Attach tool audit and MCP-derived context previews so they are visible in Phoenix
-            span.set_attribute("workflow.context_docs", len(docs))
-            try:
-                if docs:
-                    combined_context = "\n\n".join(doc.page_content for doc in docs)
-                    span.set_attribute("workflow.mcp_context_preview", combined_context[:1000])
-                    span.set_attribute(
-                        "workflow.mcp_context_sources",
-                        [doc.metadata.get("source", "Unknown") for doc in docs],
+                if intent == "ask_price_and_availability" or (
+                    "ask_price" in all_intents and (
+                        "check_availability" in all_intents or
+                        "who_is_present" in all_intents
                     )
-            except Exception:
-                # Never break the workflow because of tracing/serialization issues
-                logger.debug("Failed to attach MCP context preview to span", exc_info=True)
+                ):
+                    docs = await self._handle_price_and_availability(
+                        state, tool_audit, question,
+                        date_hint=date_hint, now_dt=now_dt,
+                    )
+
+                elif intent == "who_is_present":
+                    docs, _ = await self._handle_who_is_present(
+                        state, tool_audit, question,
+                        date_hint=date_hint, now_dt=now_dt,
+                    )
+                    if "ask_price" in all_intents:
+                        try:
+                            price_docs, _ = await self._handle_pricing(state, tool_audit, question)
+                            docs.extend(price_docs)
+                        except MCPWorkflowError:
+                            pass
+
+                elif intent == "ask_price":
+                    docs, _ = await self._handle_pricing(state, tool_audit, question)
+
+                elif intent in ("check_availability", "book_appointment"):
+                    docs, _ = await self._handle_schedule(
+                        state, tool_audit, question,
+                        date_hint=date_hint, now_dt=now_dt,
+                    )
+
+                elif intent == "list_doctors":
+                    docs, _ = await self._handle_list_doctors(state, tool_audit)
+
+                else:
+                    # Unknown MCP intent — try availability as safe default
+                    logger.warning("Unknown MCP intent '%s' — defaulting to check_availability", intent)
+                    docs, _ = await self._handle_schedule(
+                        state, tool_audit, question,
+                        date_hint=date_hint, now_dt=now_dt,
+                    )
+
+                span.set_attribute("workflow.docs_count", len(docs))
+
+            except MCPWorkflowError:
+                raise
+            except Exception as exc:
+                logger.error("Unexpected error in clinic workflow: %s", exc, exc_info=True)
+                raise MCPWorkflowError(
+                    "حصل خطأ غير متوقع أثناء جلب بيانات العيادة. ممكن تحاول تاني؟",
+                    reason="unexpected_error",
+                )
 
             qa_payload = await qa_engine.answer_question(
                 question=question,
@@ -229,264 +689,427 @@ class ClinicWorkflowService:
                 tool_audit=tool_audit,
             )
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Entity enrichment
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _apply_enrichment(self, state: ConversationState, decision: RouteDecision) -> None:
+        """Apply LLM-extracted entities from decision to state if state is missing them."""
+        try:
+            if decision.enriched_clinic and not state.entities.clinic:
+                state.entities.clinic = decision.enriched_clinic
+                state.target_entity_type = "clinic"
+
+            if decision.enriched_doctor and not state.entities.doctor:
+                state.entities.doctor = decision.enriched_doctor
+                state.target_entity_type = "doctor"
+        except Exception:
+            pass
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Intent handlers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _handle_price_and_availability(
+        self,
+        state: ConversationState,
+        audit: List[ToolAuditEntry],
+        question: str,
+        *,
+        date_hint: Optional[str],
+        now_dt: datetime,
+    ) -> List[Document]:
+        """
+        Handle combined price + availability (and/or who-is-present) queries.
+        Fetches price and schedule for the CORRECT requested date in parallel.
+        """
+        clinic_id, provider_id, provider_entry = await self._resolve_entities(
+            state, audit, question
+        )
+
+        if not clinic_id:
+            # Try pricing path which has its own fan-out fallback
+            try:
+                docs, _ = await self._handle_pricing(state, audit, question)
+                return docs
+            except MCPWorkflowError:
+                raise MCPWorkflowError(
+                    "مش قادر أحدد العيادة أو الدكتور المطلوب. ممكن توضح أكتر؟",
+                    reason="missing_clinic",
+                )
+
+        # ── Determine date range ─────────────────────────────────────────────
+        date_from, date_to, is_specific, is_today = _infer_date_range(
+            question, now_dt=now_dt, date_hint=date_hint
+        )
+
+        # ── Parallel fetch: price + schedule ─────────────────────────────────
+        async def _fetch_price():
+            try:
+                return await self._client.get_service_price(
+                    clinic_id=clinic_id, provider_id=provider_id
+                )
+            except Exception as exc:
+                logger.warning("Price fetch failed: %s", exc)
+                return None
+
+        async def _fetch_schedule():
+            try:
+                return await self._client.get_clinic_provider_schedule(
+                    clinic_id=clinic_id,
+                    provider_id=None,  # Get all doctors
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+            except Exception as exc:
+                logger.warning("Schedule fetch failed: %s", exc)
+                return None
+
+        price_resp, bulk_schedule = await asyncio.gather(_fetch_price(), _fetch_schedule())
+
+        audit.append(ToolAuditEntry(
+            name="get_service_price",
+            status="success" if price_resp else "failed",
+            details={"clinic_id": clinic_id, "services": len(price_resp.services) if price_resp else 0},
+        ))
+        audit.append(ToolAuditEntry(
+            name="get_clinic_provider_schedule",
+            status="success" if bulk_schedule else "failed",
+            details={"date_from": date_from, "date_to": date_to, "slots": len(bulk_schedule.slots) if bulk_schedule else 0},
+        ))
+
+        # ── Build combined context ────────────────────────────────────────────
+        docs: List[Document] = []
+        clinic_label = (
+            (provider_entry.clinic_name_ar or provider_entry.clinic_name_en)
+            if provider_entry else (state.entities.clinic or "العيادة")
+        )
+
+        if bulk_schedule and bulk_schedule.slots:
+            # Get provider list so we have names
+            try:
+                provider_list = await self._client.get_clinic_provider_list()
+                clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
+            except Exception:
+                clinic_providers = []
+
+            slots_by_provider: Dict[int, List] = defaultdict(list)
+            for slot in bulk_schedule.slots:
+                if slot.provider_id is not None:
+                    slots_by_provider[slot.provider_id].append(slot)
+
+            provider_map = {p.provider_id: p for p in clinic_providers if p.provider_id}
+
+            # Sort providers by earliest slot
+            def _earliest(pid: int) -> int:
+                slots = slots_by_provider.get(pid, [])
+                return min((_time_str_to_minutes(s.shift_start or "") for s in slots), default=9999)
+
+            active_pids = sorted(
+                [pid for pid in slots_by_provider if slots_by_provider[pid]],
+                key=_earliest,
+            )
+
+            if active_pids:
+                doctors_data = []
+                for pid in active_pids:
+                    p = provider_map.get(pid)
+                    if p is None:
+                        # Synthetic provider record
+                        p = ProviderRecord(clinic_id=clinic_id,
+                                          clinic_name_ar=clinic_label,
+                                          clinic_name_en=clinic_label)
+                    slot_strs = _slot_strs_from_slots(slots_by_provider[pid])
+                    doctors_data.append((p, slot_strs, price_resp))
+
+                context_text = _format_combined_price_schedule(
+                    clinic_name=clinic_label,
+                    doctors=doctors_data,
+                    question=question,
+                )
+                docs.append(Document(
+                    page_content=context_text,
+                    metadata={"source": "mcp.combined_price_schedule", "date": date_from},
+                ))
+            elif price_resp and price_resp.services:
+                # Schedule empty but have price
+                docs.append(Document(
+                    page_content=_format_price_context(price_resp, provider_entry, question),
+                    metadata={"source": "mcp.price_only"},
+                ))
+                docs.append(Document(
+                    page_content=f"ملاحظة: لم يتم العثور على مواعيد محددة لـ{date_from}. يمكنك الاستفسار عن يوم محدد.",
+                    metadata={"source": "mcp.no_schedule"},
+                ))
+        elif price_resp and price_resp.services:
+            docs.append(Document(
+                page_content=_format_price_context(price_resp, provider_entry, question),
+                metadata={"source": "mcp.price_only"},
+            ))
+
+        if not docs:
+            raise MCPWorkflowError(
+                f"مش لاقي أسعار أو مواعيد للعيادة دي في {date_from}. جرب يوم تاني أو اتصل بالاستقبال.",
+                reason="empty_combined_response",
+            )
+
+        # Enrich radiology questions
+        if is_radiology_question(question):
+            docs.append(Document(
+                page_content=get_radiology_context(question),
+                metadata={"source": "radiology.knowledge"},
+            ))
+
+        return docs
+
     async def _handle_pricing(
         self,
         state: ConversationState,
         audit: List[ToolAuditEntry],
         question: str,
     ) -> Tuple[List[Document], List[ToolAuditEntry]]:
-        clinic_id, provider_id, provider_entry = await self._resolve_entities(state, audit, question)
-        if not clinic_id:
+        """Handle pure pricing queries with fan-out fallback."""
+        try:
+            clinic_id, provider_id, provider_entry = await self._resolve_entities(
+                state, audit, question
+            )
+        except MCPWorkflowError as exc:
+            if exc.reason in {"clinic_not_found", "clinic_ambiguous"} and is_radiology_question(question):
+                clinic_id, provider_id, provider_entry = None, None, None
+            else:
+                raise
+
+        if clinic_id:
+            price_resp = await self._client.get_service_price(
+                clinic_id=clinic_id, provider_id=provider_id
+            )
+            audit.append(ToolAuditEntry(
+                name="get_service_price", status="success",
+                details={"clinic_id": clinic_id, "services": len(price_resp.services)},
+            ))
+
+            if not price_resp.services:
+                if is_radiology_question(question):
+                    return [Document(
+                        page_content=get_radiology_context(question),
+                        metadata={"source": "radiology.knowledge"},
+                    )], audit
+                raise MCPWorkflowError(
+                    "مفيش أسعار متاحة في النظام لهذه الخدمة حالياً. اتصل بالاستقبال.",
+                    reason="empty_price_response",
+                )
+
+            # If no specific doctor → show combined schedule+price for today
+            if not provider_id:
+                now_dt = _cairo_now()
+                combined = await self._fetch_combined_price_schedule(
+                    state=state, audit=audit, question=question,
+                    clinic_id=clinic_id, price_response=price_resp,
+                    provider_entry=provider_entry, now_dt=now_dt,
+                    date_hint=None,
+                )
+                if combined:
+                    docs = combined
+                    if is_radiology_question(question):
+                        docs.append(Document(
+                            page_content=get_radiology_context(question),
+                            metadata={"source": "radiology.knowledge"},
+                        ))
+                    return docs, audit
+
+            docs = [Document(
+                page_content=_format_price_context(price_resp, provider_entry, question),
+                metadata={"source": "mcp.service_price"},
+            )]
+            if is_radiology_question(question):
+                docs.append(Document(
+                    page_content=get_radiology_context(question),
+                    metadata={"source": "radiology.knowledge"},
+                ))
+            return docs, audit
+
+        # ── Fan-out: no clinic resolved → try all matching clinics ────────────
+        candidate_names = _infer_candidate_clinics(question)
+        if not candidate_names:
+            if is_emergency_radiology(question):
+                return [Document(
+                    page_content=get_emergency_radiology_context(),
+                    metadata={"source": "radiology.emergency"},
+                )], audit
+            if is_radiology_question(question):
+                return [Document(
+                    page_content=get_radiology_context(question),
+                    metadata={"source": "radiology.knowledge"},
+                )], audit
             raise MCPWorkflowError(
-                "لم أقدر أحدد العيادة المطلوبة عشان أجيب الأسعار.",
+                "مش قادر أحدد العيادة. ممكن تذكر اسم العيادة أو نوع الخدمة؟",
                 reason="missing_clinic",
             )
 
-        price_response = await self._client.get_service_price(clinic_id=clinic_id, provider_id=provider_id)
-        audit.append(
-            ToolAuditEntry(
-                name="get_service_price",
-                status="success",
-                details={
-                    "clinic_id": clinic_id,
-                    "provider_id": provider_id,
-                    "services_found": len(price_response.services),
-                },
-            )
-        )
+        async def _fetch(cid: int, cname: str):
+            try:
+                return cid, cname, await self._client.get_service_price(clinic_id=cid)
+            except Exception as exc:
+                logger.warning("Price fan-out failed for %s: %s", cname, exc)
+                return cid, cname, None
 
-        if not price_response.services:
+        resolved = self._resolve_candidate_ids(candidate_names)
+        if is_radiology_question(question) and 1 not in resolved:
+            resolved[1] = "Radiology"
+
+        results = await asyncio.gather(*(_fetch(cid, cname) for cid, cname in resolved.items()))
+        all_docs: List[Document] = []
+        for cid, cname, resp in results:
+            if not resp or not resp.services:
+                continue
+            synthetic = ProviderRecord(clinic_id=cid, clinic_name_ar=cname, clinic_name_en=cname)
+            audit.append(ToolAuditEntry(
+                name="get_service_price", status="success",
+                details={"clinic_id": cid, "clinic": cname, "services": len(resp.services)},
+            ))
+            all_docs.append(Document(
+                page_content=_format_price_context(resp, synthetic, question),
+                metadata={"source": "mcp.service_price", "clinic_id": cid},
+            ))
+
+        if not all_docs:
+            if is_radiology_question(question):
+                return [Document(
+                    page_content=get_radiology_context(question) +
+                    "\n\nالسعر: غير متوفر حالياً. يرجى الاتصال بالاستقبال.",
+                    metadata={"source": "radiology.knowledge"},
+                )], audit
             raise MCPWorkflowError(
-                "مفيش أسعار متاحة في السيستم للطلب ده حالياً.",
-                reason="empty_price_response",
+                "مفيش أسعار متاحة في النظام لهذه الخدمة.", reason="empty_price_response"
             )
 
-        context_text = _format_service_prices(price_response, provider_entry)
-        doc = Document(
-            page_content=context_text,
-            metadata={"source": "mcp.service_price"},
-        )
-        return [doc], audit
+        return all_docs, audit
 
     async def _handle_schedule(
         self,
         state: ConversationState,
         audit: List[ToolAuditEntry],
         question: str,
+        *,
+        date_hint: Optional[str] = None,
+        now_dt: Optional[datetime] = None,
     ) -> Tuple[List[Document], List[ToolAuditEntry]]:
+        """Handle schedule / availability queries."""
         clinic_id, provider_id, provider_entry = await self._resolve_entities(
             state, audit, question
         )
         if not clinic_id:
+            if is_emergency_radiology(question):
+                return [Document(
+                    page_content=get_emergency_radiology_context(),
+                    metadata={"source": "radiology.emergency"},
+                )], audit
+            if is_radiology_question(question):
+                return [Document(
+                    page_content=get_radiology_context(question),
+                    metadata={"source": "radiology.knowledge"},
+                )], audit
             raise MCPWorkflowError(
-                "محتاج أعرف اسم العيادة عشان أقدر أجيب المواعيد.",
-                reason="missing_clinic",
+                "محتاج أعرف اسم العيادة عشان أجيب المواعيد.", reason="missing_clinic"
             )
 
-        # If no specific doctor was identified, fetch schedules for all doctors in the clinic
+        base_dt = now_dt or _cairo_now()
+        date_from, date_to, is_specific, is_today = _infer_date_range(
+            question, now_dt=base_dt, date_hint=date_hint
+        )
+
+        rad_doc = None
+        if is_radiology_question(question):
+            rad_doc = Document(
+                page_content=get_radiology_context(question),
+                metadata={"source": "radiology.knowledge"},
+            )
+
         if not provider_id:
-            provider_list = await self._client.get_clinic_provider_list()
-            clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
-            
-            if not clinic_providers:
-                # Fallback: try filtering by name if ID filter failed
-                clinic_providers = _filter_provider_list(
-                    provider_list,
-                    clinic_name=state.entities.clinic,
-                    specialty=None,
-                ).providers
-                
-            if not clinic_providers:
-                 raise MCPWorkflowError(
-                    "ملقتش دكاترة للعيادة دي في النظام.",
-                    reason="provider_not_found",
-                )
+            # All doctors in clinic
+            try:
+                provider_list = await self._client.get_clinic_provider_list()
+                clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
+            except Exception:
+                clinic_providers = []
 
-            # Infer the specific target date from the question (today, tomorrow, etc.)
-            now_dt = datetime.now(timezone(timedelta(hours=2)))
-            target_dt = now_dt
-            
-            day_id = _infer_target_day_id(question, now_dt=now_dt)
-            # Find the next date that matches the target day_id
-            day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
-            if day_id and day_id in day_id_to_py_weekday:
-                target_py_wd = day_id_to_py_weekday[day_id]
-                days_ahead = (target_py_wd - target_dt.weekday()) % 7
-                target_dt = target_dt + timedelta(days=days_ahead)
-                
-            date_from_str = target_dt.strftime("%d/%m/%Y")
-            date_to_str = target_dt.strftime("%d/%m/%Y")
-
-            # IMPORTANT: Fetch ALL provider schedules in ONE clinic-wide call (no providerId filter).
-            # Per-provider calls can silently return empty slots for some doctors even when they
-            # are scheduled, causing them to be excluded. One bulk call returns all at once.
-            bulk_schedule = await self._client.get_clinic_provider_schedule(
+            bulk = await self._client.get_clinic_provider_schedule(
                 clinic_id=clinic_id,
-                provider_id=None,  # No filter → returns ALL providers for this clinic
-                date_from=date_from_str,
-                date_to=date_to_str,
+                provider_id=None,
+                date_from=date_from,
+                date_to=date_to,
             )
 
-            # Build a lookup from provider_id -> ProviderRecord for name lookups
-            provider_map = {p.provider_id: p for p in clinic_providers if p.provider_id is not None}
-
-            # Group slots by provider_id
             slots_by_provider: Dict[int, List] = defaultdict(list)
-            for slot in bulk_schedule.slots:
+            for slot in bulk.slots:
                 if slot.provider_id is not None:
                     slots_by_provider[slot.provider_id].append(slot)
 
-            # Build active_schedules preserving original ProviderRecord order
-            active_schedules: List[Tuple[ProviderRecord, ProviderScheduleResponse]] = []
-            for p in clinic_providers:
-                if p.provider_id is None:
-                    continue
-                p_slots = slots_by_provider.get(p.provider_id, [])
-                if p_slots:
-                    active_schedules.append((p, ProviderScheduleResponse(slots=p_slots)))
+            provider_map = {p.provider_id: p for p in clinic_providers if p.provider_id}
+            active = [
+                (provider_map[pid], ProviderScheduleResponse(slots=slots_by_provider[pid]))
+                for pid in slots_by_provider
+                if slots_by_provider[pid]
+            ]
 
-            # Fallback: if bulk call returned no slots at all (backend may still require per-provider
-            # calls), fall back to individual calls.
-            if not active_schedules and not bulk_schedule.slots:
-                logger.warning(
-                    "Bulk clinic schedule returned no slots for clinic_id=%s. "
-                    "Falling back to per-provider calls.",
-                    clinic_id,
-                )
-                sem = asyncio.Semaphore(10)
-
-                async def fetch_schedule(p: ProviderRecord) -> Tuple[ProviderRecord, ProviderScheduleResponse]:
+            if not active and not bulk.slots:
+                # Per-provider fallback
+                sem = asyncio.Semaphore(8)
+                async def _per_provider(p: ProviderRecord):
                     async with sem:
-                        resp = await self._client.get_clinic_provider_schedule(
-                            clinic_id=clinic_id,
-                            provider_id=p.provider_id,
-                            date_from=date_from_str,
-                            date_to=date_to_str,
-                        )
-                        return p, resp
+                        try:
+                            resp = await self._client.get_clinic_provider_schedule(
+                                clinic_id=clinic_id, provider_id=p.provider_id,
+                                date_from=date_from, date_to=date_to,
+                            )
+                            return p, resp
+                        except Exception:
+                            return p, ProviderScheduleResponse(slots=[])
 
-                results = await asyncio.gather(*(fetch_schedule(p) for p in clinic_providers))
-                active_schedules = [(p, sched) for p, sched in results if sched.slots]
+                results = await asyncio.gather(*(_per_provider(p) for p in clinic_providers))
+                active = [(p, r) for p, r in results if r.slots]
 
-            if not active_schedules:
-                 raise MCPWorkflowError(
-                    "مفيش مواعيد متاحة لأي دكتور في العيادة دي دلوقتي.",
+            if not active:
+                raise MCPWorkflowError(
+                    f"مفيش مواعيد متاحة في هذه العيادة للفترة من {date_from} لـ {date_to}.",
                     reason="empty_schedule_response",
                 )
-                
-            clinic_name = state.entities.clinic or "العيادة"
-            if provider_entry and (provider_entry.clinic_name_ar or provider_entry.clinic_name_en):
-                 clinic_name = provider_entry.clinic_name_ar or provider_entry.clinic_name_en
-            
-            context_text = _format_multi_provider_schedule(clinic_name, active_schedules)
-            
-            doc = Document(
-                page_content=context_text,
-                metadata={"source": "mcp.clinic_schedule_all"},
-            )
-            
-            # Audit the batch operation
-            audit.append(
-                ToolAuditEntry(
-                    name="get_clinic_schedule_all",
-                    status="success",
-                    details={
-                        "clinic_id": clinic_id,
-                        "providers_count": len(clinic_providers),
-                        "active_providers": len(active_schedules),
-                        "bulk_slots_total": len(bulk_schedule.slots),
-                    },
-                )
-            )
-            return [doc], audit
 
-        # For specific provider availability queries, call the schedule tool for a date range
-        # and aggregate all returned slots into a single unified schedule view.
-        # Infer the target date from the question
-        now_dt = datetime.now(timezone(timedelta(hours=2)))
-        target_dt = now_dt
-        day_id = _infer_target_day_id(question, now_dt=now_dt)
-        day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
-        if day_id and day_id in day_id_to_py_weekday:
-            target_py_wd = day_id_to_py_weekday[day_id]
-            days_ahead = (target_py_wd - target_dt.weekday()) % 7
-            target_dt = target_dt + timedelta(days=days_ahead)
-            
-        date_from_str = target_dt.strftime("%d/%m/%Y")
-        date_to_str = target_dt.strftime("%d/%m/%Y")
-        
-        all_slots: List[ScheduleSlot] = []
-        
-        # Execute request for that exact day
-        day_response = await self._client.get_clinic_provider_schedule(
-            clinic_id=clinic_id,
-            provider_id=provider_id,
-            date_from=date_from_str,
-            date_to=date_to_str,
+            clinic_label = state.entities.clinic or "العيادة"
+            if provider_entry:
+                clinic_label = provider_entry.clinic_name_ar or provider_entry.clinic_name_en or clinic_label
+
+            context = _format_multi_doctor_schedule(clinic_label, active)
+            audit.append(ToolAuditEntry(
+                name="get_clinic_schedule_all", status="success",
+                details={"clinic_id": clinic_id, "active_doctors": len(active), "date_from": date_from},
+            ))
+            docs = [Document(page_content=context, metadata={"source": "mcp.clinic_schedule_all"})]
+            if rad_doc:
+                docs.append(rad_doc)
+            return docs, audit
+
+        # ── Specific provider ─────────────────────────────────────────────────
+        resp = await self._client.get_clinic_provider_schedule(
+            clinic_id=clinic_id, provider_id=provider_id,
+            date_from=date_from, date_to=date_to,
         )
+        audit.append(ToolAuditEntry(
+            name="get_clinic_provider_schedule", status="success",
+            details={"clinic_id": clinic_id, "provider_id": provider_id,
+                     "date_from": date_from, "slots": len(resp.slots)},
+        ))
 
-        audit.append(
-            ToolAuditEntry(
-                name="get_clinic_provider_schedule",
-                status="success",
-                details={
-                    "clinic_id": clinic_id,
-                    "provider_id": provider_id,
-                    "date_from": date_from_str,
-                    "date_to": date_to_str,
-                    "slots": len(day_response.slots),
-                },
-            )
-        )
-        if day_response.slots:
-            all_slots.extend(day_response.slots)
-
-        if not all_slots:
+        if not resp.slots:
             raise MCPWorkflowError(
-                "مفيش مواعيد متاحة دلوقتي في النظام.",
-                reason="empty_schedule_response",
+                "مفيش مواعيد متاحة للدكتور ده في الفترة دي.", reason="empty_schedule_response"
             )
 
-        aggregated_schedule = ProviderScheduleResponse(slots=all_slots)
-        context_text = _format_schedule(aggregated_schedule, provider_entry)
-        doc = Document(
-            page_content=context_text,
-            metadata={"source": "mcp.provider_schedule"},
-        )
-        return [doc], audit
-
-    async def _handle_list_doctors(
-        self,
-        state: ConversationState,
-        audit: List[ToolAuditEntry],
-    ) -> Tuple[List[Document], List[ToolAuditEntry]]:
-        provider_list = await self._client.get_clinic_provider_list()
-        audit.append(
-            ToolAuditEntry(
-                name="get_clinic_provider_list",
-                status="success",
-                details={"providers": len(provider_list.providers)},
-            )
-        )
-
-        clinic_id: Optional[int] = getattr(state.entities, "clinic_id", None)
-        if clinic_id is not None:
-            filtered = _filter_provider_list_by_clinic_id(provider_list, clinic_id)
-        else:
-            filtered = _filter_provider_list(
-                provider_list,
-                clinic_name=state.entities.clinic,
-                specialty=state.entities.specialty,
-            )
-        if not filtered.providers:
-            raise MCPWorkflowError(
-                "ملقتش دكاترة مطابقين للعيادة أو التخصص اللي اتذكروا.",
-                reason="provider_not_found",
-            )
-
-        context_text = _format_provider_list(filtered)
-        doc = Document(page_content=context_text, metadata={"source": "mcp.provider_list"})
-        return [doc], audit
+        context = _format_schedule_context(resp, provider_entry)
+        docs = [Document(page_content=context, metadata={"source": "mcp.provider_schedule"})]
+        if rad_doc:
+            docs.append(rad_doc)
+        return docs, audit
 
     async def _handle_who_is_present(
         self,
@@ -494,1111 +1117,372 @@ class ClinicWorkflowService:
         audit: List[ToolAuditEntry],
         question: str,
         *,
-        now_dt: datetime | None,
-        max_concurrency: int = 10,
+        date_hint: Optional[str] = None,
+        now_dt: Optional[datetime] = None,
     ) -> Tuple[List[Document], List[ToolAuditEntry]]:
-        """
-        Answer queries like: "مين موجود النهارده/بكرة في عيادة <X>؟"
-        by joining provider list + provider schedules for the requested day only.
-        """
-        clinic_id, _, _ = await self._resolve_entities(state, audit, question)
+        """Handle 'who is present today / on a given day' queries."""
+        clinic_id, _, provider_entry = await self._resolve_entities(state, audit, question)
         if not clinic_id:
-            raise MCPWorkflowError(
-                "محتاج أعرف اسم العيادة عشان أقدر أقول مين موجود.",
-                reason="missing_clinic",
-            )
+            raise MCPWorkflowError("محتاج اسم العيادة عشان أعرف مين موجود.", reason="missing_clinic")
 
-        day_id = _infer_target_day_id(question, now_dt=now_dt)
-        provider_list = await self._client.get_clinic_provider_list()
-        audit.append(
-            ToolAuditEntry(
-                name="get_clinic_provider_list",
-                status="success",
-                details={"providers": len(provider_list.providers)},
-            )
-        )
+        base_dt = now_dt or _cairo_now()
+        day_id = _infer_target_day_id(question, now_dt=base_dt, date_hint=date_hint)
+        date_from, date_to, _, _ = _infer_date_range(question, now_dt=base_dt, date_hint=date_hint)
 
-        providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
-        if not providers:
-            # Fallback to name-based filtering if clinic_id not present in MCP payload for some reason.
-            providers = _filter_provider_list(
-                provider_list,
-                clinic_name=state.entities.clinic,
-                specialty=None,
-            ).providers
+        try:
+            provider_list = await self._client.get_clinic_provider_list()
+            clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
+        except Exception:
+            clinic_providers = []
 
-        if not providers:
-            raise MCPWorkflowError(
-                "ملقتش دكاترة للعيادة دي في بيانات السيستم.",
-                reason="provider_not_found",
-            )
-
-        # IMPORTANT: Fetch ALL provider schedules in ONE clinic-wide call (no providerId filter).
-        # Per-provider calls can silently return empty slots for some doctors even when they
-        # are scheduled, causing them to be excluded from the response.
-        target_dt_base = now_dt or datetime.now(timezone(timedelta(hours=2)))
-        day_id_to_py_weekday = {1: 5, 2: 6, 3: 0, 4: 1, 5: 2, 6: 3, 7: 4}
-        if day_id and day_id in day_id_to_py_weekday:
-            target_py_wd = day_id_to_py_weekday[day_id]
-            days_ahead = (target_py_wd - target_dt_base.weekday()) % 7
-            target_dt_base = target_dt_base + timedelta(days=days_ahead)
-
-        target_date_str = target_dt_base.strftime("%d/%m/%Y")
-
-        bulk_schedule = await self._client.get_clinic_provider_schedule(
+        bulk = await self._client.get_clinic_provider_schedule(
             clinic_id=clinic_id,
-            provider_id=None,  # No filter → returns ALL providers for this clinic
-            date_from=target_date_str,
-            date_to=target_date_str,
+            provider_id=None,
+            date_from=date_from,
+            date_to=date_to,
         )
 
-        # Group bulk slots by provider_id
-        slots_by_provider: Dict[int, List[ScheduleSlot]] = defaultdict(list)
-        for slot in bulk_schedule.slots:
+        slots_by_provider: Dict[int, List] = defaultdict(list)
+        for slot in bulk.slots:
             if slot.provider_id is not None:
                 slots_by_provider[slot.provider_id].append(slot)
 
-        # Build present list from bulk data, preserving doctor name from provider list
-        provider_map = {p.provider_id: p for p in providers if p.provider_id is not None}
-        present: list[tuple[str, list[str]]] = []
-        for pid, p_slots in slots_by_provider.items():
+        provider_map = {p.provider_id: p for p in clinic_providers if p.provider_id}
+
+        present: List[Tuple[str, List[str]]] = []
+        for pid, slots in slots_by_provider.items():
             p = provider_map.get(pid)
-            name = (p.provider_name_ar or p.provider_name_en if p else None) or f"دكتور (ID:{pid})"
-            times = []
-            for slot in p_slots:
-                start = slot.shift_start or "غير محدد"
-                end = slot.shift_end or "غير محدد"
-                times.append(f"{start} → {end}")
-            present.append((name, times))
+            name = (p.provider_name_ar or p.provider_name_en) if p else "دكتور"
+            time_strs = _slot_strs_from_slots(slots)
+            present.append((name, time_strs))
 
-        # Fallback: if bulk returned no slots, fall back to per-provider calls
-        if not present and not bulk_schedule.slots:
-            logger.warning(
-                "Bulk clinic schedule returned no slots for who_is_present (clinic_id=%s). "
-                "Falling back to per-provider calls.",
-                clinic_id,
-            )
-            sem = asyncio.Semaphore(max_concurrency)
-
-            async def fetch_for_provider(p: ProviderRecord) -> tuple[ProviderRecord, ProviderScheduleResponse]:
+        if not present and not bulk.slots:
+            # Per-provider fallback
+            sem = asyncio.Semaphore(8)
+            async def _pp(p: ProviderRecord):
                 async with sem:
-                    resp = await self._client.get_clinic_provider_schedule(
-                        clinic_id=clinic_id,
-                        provider_id=p.provider_id,
-                        date_from=target_date_str,
-                        date_to=target_date_str,
-                    )
-                    audit.append(
-                        ToolAuditEntry(
-                            name="get_clinic_provider_schedule",
-                            status="success",
-                            details={
-                                "clinic_id": clinic_id,
-                                "provider_id": p.provider_id,
-                                "date_from": target_date_str,
-                                "date_to": target_date_str,
-                                "slots": len(resp.slots),
-                            },
+                    try:
+                        resp = await self._client.get_clinic_provider_schedule(
+                            clinic_id=clinic_id, provider_id=p.provider_id,
+                            date_from=date_from, date_to=date_to,
                         )
-                    )
-                    return p, resp
+                        return p, resp
+                    except Exception:
+                        return p, ProviderScheduleResponse(slots=[])
 
-            fallback_results = await asyncio.gather(*(fetch_for_provider(p) for p in providers))
-            for p, resp in fallback_results:
-                if not resp.slots:
-                    continue
-                name = p.provider_name_ar or p.provider_name_en or "دكتور"
-                times = []
-                for slot in resp.slots:
-                    start = slot.shift_start or "غير محدد"
-                    end = slot.shift_end or "غير محدد"
-                    times.append(f"{start} → {end}")
-                present.append((name, times))
+            results = await asyncio.gather(*(_pp(p) for p in clinic_providers))
+            for p, resp in results:
+                if resp.slots:
+                    name = p.provider_name_ar or p.provider_name_en or "دكتور"
+                    present.append((name, _slot_strs_from_slots(resp.slots)))
 
-        audit.append(
-            ToolAuditEntry(
-                name="get_clinic_provider_schedule",
-                status="success",
-                details={
-                    "clinic_id": clinic_id,
-                    "provider_id": None,
-                    "date_from": target_date_str,
-                    "date_to": target_date_str,
-                    "slots": len(bulk_schedule.slots),
-                    "providers_with_slots": len(present),
-                },
-            )
-        )
+        audit.append(ToolAuditEntry(
+            name="get_clinic_provider_schedule", status="success",
+            details={"clinic_id": clinic_id, "day_id": day_id,
+                     "date": date_from, "present_count": len(present)},
+        ))
 
         if not present:
             raise MCPWorkflowError(
-                "مفيش دكاترة عليهم مواعيد في اليوم ده حسب السيستم.",
+                f"مفيش دكاترة موجودين في هذه العيادة في {date_from}.",
                 reason="empty_schedule_response",
             )
 
         clinic_label = state.entities.clinic or "العيادة"
-        context_text = _format_who_is_present(
-            clinic_label=clinic_label,
-            day_id=day_id,
-            present=present,
+        if provider_entry:
+            clinic_label = provider_entry.clinic_name_ar or provider_entry.clinic_name_en or clinic_label
+
+        context = _format_who_is_present(clinic_label, day_id, present)
+        return [Document(page_content=context, metadata={"source": "mcp.who_is_present"})], audit
+
+    async def _handle_list_doctors(
+        self,
+        state: ConversationState,
+        audit: List[ToolAuditEntry],
+    ) -> Tuple[List[Document], List[ToolAuditEntry]]:
+        """Handle 'list all doctors' queries."""
+        provider_list = await self._client.get_clinic_provider_list()
+        clinic_id = getattr(state.entities, "clinic_id", None)
+        clinic_name = state.entities.clinic
+
+        if clinic_id:
+            filtered = _filter_provider_list_by_clinic_id(provider_list, clinic_id)
+        elif clinic_name:
+            normalized = _normalize_clinic_name(clinic_name)
+            cid = _hardcoded_clinic_id(normalized or clinic_name)
+            if cid:
+                filtered = _filter_provider_list_by_clinic_id(provider_list, cid)
+            else:
+                filtered = ProviderListPayload(providers=[
+                    p for p in provider_list.providers
+                    if p.clinic_name_ar and (
+                        clinic_name.casefold() in p.clinic_name_ar.casefold() or
+                        (normalized and normalized.casefold() in p.clinic_name_ar.casefold())
+                    )
+                ] or provider_list.providers[:15])
+        else:
+            filtered = ProviderListPayload(providers=provider_list.providers[:20])
+
+        audit.append(ToolAuditEntry(
+            name="get_clinic_provider_list", status="success",
+            details={"total": len(provider_list.providers), "filtered": len(filtered.providers)},
+        ))
+
+        if not filtered.providers:
+            raise MCPWorkflowError("مش لاقي دكاترة مسجلين.", reason="provider_not_found")
+
+        context = _format_provider_list(filtered)
+        return [Document(page_content=context, metadata={"source": "mcp.provider_list"})], audit
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Combined price + schedule helper (used by _handle_pricing when no doctor)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _fetch_combined_price_schedule(
+        self,
+        *,
+        state: ConversationState,
+        audit: List[ToolAuditEntry],
+        question: str,
+        clinic_id: int,
+        price_response: ServicePriceResponse,
+        provider_entry: Optional[ProviderRecord],
+        now_dt: datetime,
+        date_hint: Optional[str],
+    ) -> List[Document]:
+        """Merge today's schedule with prices for a clinic (no specific doctor)."""
+        date_from, date_to, _, _ = _infer_date_range(
+            question, now_dt=now_dt, date_hint=date_hint
         )
-        doc = Document(page_content=context_text, metadata={"source": "mcp.who_is_present"})
-        return [doc], audit
+
+        try:
+            provider_list = await self._client.get_clinic_provider_list()
+            clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
+        except Exception:
+            return []
+
+        if not clinic_providers:
+            return []
+
+        try:
+            bulk = await self._client.get_clinic_provider_schedule(
+                clinic_id=clinic_id,
+                provider_id=None,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        except Exception:
+            return []
+
+        audit.append(ToolAuditEntry(
+            name="get_clinic_schedule_combined", status="success",
+            details={"clinic_id": clinic_id, "date_from": date_from, "slots": len(bulk.slots)},
+        ))
+
+        slots_by_provider: Dict[int, List] = defaultdict(list)
+        for slot in bulk.slots:
+            if slot.provider_id is not None:
+                slots_by_provider[slot.provider_id].append(slot)
+
+        provider_map = {p.provider_id: p for p in clinic_providers if p.provider_id}
+
+        def _earliest_pid(pid: int) -> int:
+            return min(
+                (_time_str_to_minutes(s.shift_start or "") for s in slots_by_provider.get(pid, [])),
+                default=9999,
+            )
+
+        sorted_pids = sorted(
+            [pid for pid in slots_by_provider if slots_by_provider[pid]],
+            key=_earliest_pid,
+        )
+
+        doctors_data = []
+        for pid in sorted_pids:
+            p = provider_map.get(pid, ProviderRecord(
+                clinic_id=clinic_id,
+                clinic_name_ar=state.entities.clinic or "العيادة",
+            ))
+            slot_strs = _slot_strs_from_slots(slots_by_provider[pid])
+            doctors_data.append((p, slot_strs, price_response))
+
+        if not doctors_data:
+            return []
+
+        clinic_label = (
+            (provider_entry.clinic_name_ar or provider_entry.clinic_name_en)
+            if provider_entry else (state.entities.clinic or "العيادة")
+        )
+        context = _format_combined_price_schedule(
+            clinic_name=clinic_label,
+            doctors=doctors_data,
+            question=question,
+        )
+        return [Document(page_content=context, metadata={"source": "mcp.combined_price_schedule"})]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Entity resolution
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _resolve_entities(
         self,
         state: ConversationState,
         audit: List[ToolAuditEntry],
-        raw_question: Optional[str] = None,
+        question: str,
     ) -> Tuple[Optional[int], Optional[int], Optional[ProviderRecord]]:
         """
-        Resolve clinic and provider identifiers using MCP hybrid matching.
-        
-        Uses the new match_doctor_hybrid MCP tool for advanced name matching with:
-        - Token-based matching with positional weights
-        - Fuzzy matching for typos and variations
-        - Arabic/English name support
+        Resolve clinic_id and provider_id using:
+        1. Hardcoded fast-path for known specialties
+        2. MCP hybrid matching for everything else
         """
         doctor_name = state.entities.doctor
-        clinic_name = state.entities.clinic
-        question_text = state.last_user_question or raw_question or ""
+        clinic_name = _normalize_clinic_name(state.entities.clinic)
         clinic_id: Optional[int] = getattr(state.entities, "clinic_id", None)
         provider_id: Optional[int] = getattr(state.entities, "provider_id", None)
-
-        # Fallback heuristics if entity extraction missed them
-        if not doctor_name:
-            inferred_doctor = _infer_doctor_from_text(question_text)
-            if inferred_doctor:
-                logger.debug("Inferred doctor name '%s' from question text.", inferred_doctor)
-                doctor_name = inferred_doctor
-
-        # Only infer a clinic name when the user did NOT provide a doctor name.
-        # If a doctor is present, inferring clinic from specialty can incorrectly constrain
-        # the match and cause repeated clinic disambiguation loops.
-        if not clinic_name and not doctor_name and clinic_id is None:
-            inferred_clinic = _infer_clinic_from_context(state, question_text)
-            if inferred_clinic:
-                logger.debug("Inferred clinic name '%s' from state/question context.", inferred_clinic)
-                clinic_name = inferred_clinic
-
         provider_entry: Optional[ProviderRecord] = None
 
-        # Resolve clinic_id early via hybrid clinic matcher when user mentions a clinic.
-        # This makes the workflow robust against typos/variants in clinic names.
+        # ── Fast-path: hardcoded clinic ID ────────────────────────────────────
         if clinic_id is None and clinic_name:
-            with tracer.start_as_current_span("mcp.match_clinic_hybrid") as span:
-                span.set_attribute("query.clinic_name", clinic_name)
-                clinic_match: ClinicMatchResponse = await self._client.match_clinic_hybrid(
-                    query=clinic_name,
-                    top_k=5,
-                    min_score=0.65,
+            cid = _hardcoded_clinic_id(clinic_name)
+            if cid is not None:
+                clinic_id = cid
+                provider_entry = ProviderRecord(
+                    clinic_id=clinic_id,
+                    clinic_name_ar=clinic_name,
+                    clinic_name_en=clinic_name,
                 )
+                logger.debug("Hardcoded clinic: '%s' → id=%s", clinic_name, clinic_id)
 
-                audit.append(
-                    ToolAuditEntry(
-                        name="match_clinic_hybrid",
-                        status="success",
-                        details={
-                            "query": clinic_name,
-                            "status": clinic_match.status.value,
-                            "candidates_count": len(clinic_match.candidates),
-                            "best_match_score": clinic_match.best_match.score if clinic_match.best_match else None,
-                        },
-                    )
+        # ── Hybrid MCP matching for clinic ────────────────────────────────────
+        if clinic_id is None and clinic_name:
+            try:
+                match = await self._client.match_clinic_hybrid(
+                    query=clinic_name, top_k=1, min_score=0.3
                 )
-
-                span.set_attribute("match.status", clinic_match.status.value)
-                span.set_attribute("match.candidates_count", len(clinic_match.candidates))
-
-                if clinic_match.status == HybridMatchStatus.UNAMBIGUOUS_MATCH:
-                    if not clinic_match.best_match:
-                        raise MCPWorkflowError(
-                            "حصل خطأ في نظام البحث. من فضلك حاول تاني.",
-                            reason="invalid_match_response",
-                        )
-                    parsed_clinic_id = _safe_parse_int(clinic_match.best_match.clinic_id)
-                    if parsed_clinic_id is not None:
-                        clinic_id = parsed_clinic_id
-                    # Keep canonical clinic name for downstream prompts/logging
-                    clinic_name = clinic_match.best_match.clinic_name or clinic_name
-                    # Propagate canonical clinic into state so later turns + formatting use DB name.
-                    try:
-                        if hasattr(state, "entities") and hasattr(state.entities, "clinic"):
-                            state.entities.clinic = clinic_name
-                        if hasattr(state, "entities") and hasattr(state.entities, "clinic_id"):
-                            state.entities.clinic_id = clinic_id
-                    except Exception:
-                        # Don't break workflow if state object is immutable in some contexts.
-                        pass
-                    # If this is a clinic-only query (no provider yet), create a lightweight
-                    # ProviderRecord with the canonical clinic name so schedule/pricing formatting
-                    # uses the DB name, not the user's typo.
-                    if provider_entry is None:
+                best = match.best_match
+                if best and (match.status == HybridMatchStatus.UNAMBIGUOUS_MATCH or best.score >= 0.40):
+                    cid = _safe_parse_int(best.clinic_id)
+                    if cid:
+                        clinic_id = cid
                         provider_entry = ProviderRecord(
                             clinic_id=clinic_id,
-                            clinic_name_ar=clinic_name,
-                            clinic_name_en=clinic_name,
+                            clinic_name_ar=best.clinic_name or clinic_name,
+                            clinic_name_en=best.clinic_name or clinic_name,
                         )
-
-                elif clinic_match.status == HybridMatchStatus.AMBIGUOUS_NEED_MORE_INFO:
-                    candidates = [
-                        {
-                            "clinic_id": _safe_parse_int(c.clinic_id),
-                            "clinic_name": c.clinic_name,
-                            "score": c.score,
-                        }
-                        for c in clinic_match.candidates[:5]
-                    ]
+                elif match.status == HybridMatchStatus.AMBIGUOUS_MATCH and match.candidates:
                     raise MCPWorkflowError(
-                        clinic_match.message or "يوجد أكثر من عيادة بنفس الاسم. من فضلك اختار العيادة.",
+                        "في أكتر من عيادة بالاسم ده. اختار:",
                         reason="clinic_ambiguous",
-                        data={"candidates": candidates},
+                        data={"candidates": [c.__dict__ for c in (match.candidates or [])]},
                     )
-
-                elif clinic_match.status == HybridMatchStatus.NO_MATCH:
+                elif match.status not in (HybridMatchStatus.UNAMBIGUOUS_MATCH,):
                     raise MCPWorkflowError(
-                        clinic_match.message or "ملقتش عيادة بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
+                        f"مش لاقي عيادة بـ '{clinic_name}'. ممكن تكتب الاسم بالكامل؟",
                         reason="clinic_not_found",
                     )
-                # LOW_CONFIDENCE: treat like ambiguous
-                elif clinic_match.status == HybridMatchStatus.LOW_CONFIDENCE:
-                    candidates = [
-                        {
-                            "clinic_id": _safe_parse_int(c.clinic_id),
-                            "clinic_name": c.clinic_name,
-                            "score": c.score,
-                        }
-                        for c in clinic_match.candidates[:5]
-                    ]
-                    raise MCPWorkflowError(
-                        clinic_match.message or "مش متأكد من اسم العيادة. ممكن تختار من اللي ظهروا؟",
-                        reason="clinic_ambiguous",
-                        data={"candidates": candidates},
-                    )
-        
-        if doctor_name:
-            # Use the new hybrid matching MCP tool
-            with tracer.start_as_current_span("mcp.match_doctor_hybrid") as span:
-                span.set_attribute("query.doctor_name", doctor_name)
-                if clinic_name:
-                    span.set_attribute("query.clinic_name", clinic_name)
-                
-                match_response = await self._client.match_doctor_hybrid(
+            except MCPWorkflowError:
+                raise
+            except Exception as exc:
+                logger.warning("Clinic match error: %s", exc)
+
+        # ── Doctor resolution ─────────────────────────────────────────────────
+        if doctor_name and provider_id is None:
+            try:
+                match = await self._client.match_doctor_hybrid(
                     query=doctor_name,
-                    clinic_id=str(clinic_id) if clinic_id is not None else None,
-                    clinic_name=None,
-                    top_k=5,
-                    min_score_multi=0.6,
-                    min_score_single=0.55,
+                    clinic_id=clinic_id,
+                    top_k=3,
                 )
-                
-                audit.append(
-                    ToolAuditEntry(
-                        name="match_doctor_hybrid",
-                        status="success",
-                        details={
-                            "query": doctor_name,
-                            "clinic_name": clinic_name,
-                            "status": match_response.status.value,
-                            "candidates_count": len(match_response.candidates),
-                            "best_match_score": match_response.best_match.score if match_response.best_match else None,
-                        },
-                    )
-                )
-                
-                span.set_attribute("match.status", match_response.status.value)
-                span.set_attribute("match.candidates_count", len(match_response.candidates))
-                
-                if match_response.status == HybridMatchStatus.UNAMBIGUOUS_MATCH:
-                    # Validate that best_match is present for UNAMBIGUOUS_MATCH
-                    if not match_response.best_match:
-                        logger.error(
-                            "MCP returned UNAMBIGUOUS_MATCH without best_match object - invalid response"
-                        )
-                        raise MCPWorkflowError(
-                            "حصل خطأ في نظام البحث. من فضلك حاول تاني.",
-                            reason="invalid_match_response",
-                        )
-                    
-                    # Clear match found - use it
-                    best = match_response.best_match
-                    logger.info(f"Hybrid match found: {best.name_ar or best.name_en} (score: {best.score:.2f})")
-                    
-                    # Safely convert string IDs to integers, handling non-numeric values
-                    parsed_provider_id = _safe_parse_int(best.provider_id)
-                    parsed_clinic_id = _safe_parse_int(best.clinic_id)
-                    
-                    # Convert DoctorMatchResult to ProviderRecord for compatibility
+                if match and match.status == HybridMatchStatus.UNAMBIGUOUS_MATCH and match.best_match:
+                    best = match.best_match
+                    provider_id = _safe_parse_int(best.provider_id)
+                    if not clinic_id:
+                        clinic_id = _safe_parse_int(best.clinic_id)
                     provider_entry = ProviderRecord(
-                        provider_id=parsed_provider_id,
-                        clinic_id=parsed_clinic_id,
+                        provider_id=provider_id,
+                        clinic_id=clinic_id,
                         provider_name_ar=best.name_ar,
                         provider_name_en=best.name_en,
                         clinic_name_ar=best.clinic_name,
                         clinic_name_en=best.clinic_name,
                     )
-                    clinic_id = parsed_clinic_id
-                    provider_id = parsed_provider_id
-                    
-                elif match_response.status == HybridMatchStatus.AMBIGUOUS_NEED_MORE_INFO:
-                    # Multiple matches - ask user for clarification
-                    alt_names = [
-                        candidate.name_ar or candidate.name_en
-                        for candidate in match_response.candidates[:3]
-                    ]
-                    if alt_names:
-                        raise MCPWorkflowError(
-                            f"يوجد أكثر من دكتور بنفس الاسم. هل تقصد: {' أو '.join(alt_names)}؟",
-                            reason="provider_ambiguous",
-                            data={
-                                "candidates": [
-                                    {
-                                        "provider_id": _safe_parse_int(c.provider_id),
-                                        "clinic_id": _safe_parse_int(c.clinic_id),
-                                        "clinic_name": c.clinic_name,
-                                        "name_ar": c.name_ar,
-                                        "name_en": c.name_en,
-                                        "score": c.score,
-                                    }
-                                    for c in match_response.candidates
-                                ]
-                            },
-                        )
-                    else:
-                        raise MCPWorkflowError(
-                            match_response.message,
-                            reason="provider_ambiguous",
-                            data={"candidates": []},
-                        )
-                        
-                elif match_response.status == HybridMatchStatus.NO_MATCH:
-                    # No match found in the (possibly resolved) clinic. If we constrained by clinic_id,
-                    # do a fallback global search to detect "doctor exists but in a different clinic".
-                    if clinic_id is not None and doctor_name:
-                        try:
-                            fallback = await self._client.match_doctor_hybrid(
-                                query=doctor_name,
-                                clinic_id=None,
-                                clinic_name=None,
-                                top_k=5,
-                                min_score_multi=0.6,
-                                min_score_single=0.55,
-                            )
-                        except Exception:
-                            fallback = None
-
-                        if fallback and fallback.status == HybridMatchStatus.UNAMBIGUOUS_MATCH and fallback.best_match:
-                            best = fallback.best_match
-                            raise MCPWorkflowError(
-                                (
-                                    f"الاسم موجود، لكن مش في العيادة اللي اتذكرت. "
-                                    f"الدكتور {best.name_ar or best.name_en} موجود في عيادة {best.clinic_name}. "
-                                    "هل تحب أجيب مواعيده في العيادة دي؟"
-                                ),
-                                reason="provider_clinic_mismatch",
-                                data={
-                                    "requested_clinic": clinic_name,
-                                    "candidates": [
-                                        {
-                                            "provider_id": _safe_parse_int(best.provider_id),
-                                            "clinic_id": _safe_parse_int(best.clinic_id),
-                                            "clinic_name": best.clinic_name,
-                                            "name_ar": best.name_ar,
-                                            "name_en": best.name_en,
-                                            "score": best.score,
-                                        }
-                                    ],
-                                },
-                            )
-
-                    # No match found at all
+                elif match and match.status == HybridMatchStatus.AMBIGUOUS_MATCH:
                     raise MCPWorkflowError(
-                        match_response.message
-                        or "ملقتش دكتور بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
-                        reason="provider_not_found",
+                        "في أكتر من دكتور بالاسم ده. اختار:",
+                        reason="provider_ambiguous",
+                        data={"candidates": [c.__dict__ for c in (match.candidates or [])]},
                     )
-                    
-                elif match_response.status == HybridMatchStatus.LOW_CONFIDENCE:
-                    # Low confidence match - treat similar to ambiguous, ask for clarification
-                    alt_names = [
-                        candidate.name_ar or candidate.name_en
-                        for candidate in match_response.candidates[:3]
-                    ]
-                    if alt_names:
-                        raise MCPWorkflowError(
-                            f"مش متأكد من الاسم. هل تقصد: {' أو '.join(alt_names)}؟",
-                            reason="provider_low_confidence",
-                            data={
-                                "candidates": [
-                                    {
-                                        "provider_id": _safe_parse_int(c.provider_id),
-                                        "clinic_id": _safe_parse_int(c.clinic_id),
-                                        "clinic_name": c.clinic_name,
-                                        "name_ar": c.name_ar,
-                                        "name_en": c.name_en,
-                                        "score": c.score,
-                                    }
-                                    for c in match_response.candidates
-                                ]
-                            },
-                        )
-                    else:
-                        raise MCPWorkflowError(
-                            match_response.message or "ملقتش دكتور بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
-                            reason="provider_low_confidence",
-                            data={"candidates": []},
-                        )
-                        
-                else:
-                    # Unknown/unexpected status - log and raise error
-                    logger.error(
-                        f"MCP returned unexpected match status: {match_response.status}"
-                    )
-                    raise MCPWorkflowError(
-                        "حصل خطأ في نظام البحث. من فضلك حاول تاني.",
-                        reason="unexpected_match_status",
-                    )
+            except MCPWorkflowError:
+                raise
+            except Exception as exc:
+                logger.warning("Doctor match error: %s", exc)
 
-        # If we have no clinic_id but do have a clinic_name, try resolving again using the matcher.
-        # (This covers flows without doctor_name, e.g. "مواعيد عيادة ...")
-        if clinic_id is None and clinic_name:
-            clinic_match = await self._client.match_clinic_hybrid(query=clinic_name, top_k=5, min_score=0.65)
-            if clinic_match.status == HybridMatchStatus.UNAMBIGUOUS_MATCH and clinic_match.best_match:
-                clinic_id = _safe_parse_int(clinic_match.best_match.clinic_id)
-                clinic_name = clinic_match.best_match.clinic_name or clinic_name
-                try:
-                    if hasattr(state, "entities") and hasattr(state.entities, "clinic"):
-                        state.entities.clinic = clinic_name
-                    if hasattr(state, "entities") and hasattr(state.entities, "clinic_id"):
-                        state.entities.clinic_id = clinic_id
-                except Exception:
-                    pass
-                if provider_entry is None:
-                    provider_entry = ProviderRecord(
-                        clinic_id=clinic_id,
-                        clinic_name_ar=clinic_name,
-                        clinic_name_en=clinic_name,
-                    )
-            else:
-                raise MCPWorkflowError(
-                    clinic_match.message or "ملقتش عيادة بالاسم اللي اتذكر. ممكن تكتب الاسم بالكامل؟",
-                    reason="clinic_not_found",
-                )
+        audit.append(ToolAuditEntry(
+            name="resolve_entities", status="success",
+            details={
+                "clinic_id": clinic_id, "provider_id": provider_id,
+                "clinic_name": clinic_name, "doctor_name": doctor_name,
+            },
+        ))
 
         return clinic_id, provider_id, provider_entry
 
-
-def _safe_parse_int(value: Any) -> Optional[int]:
-    """
-    Safely parse a value to int, returning None for invalid/non-numeric values.
-    
-    Handles cases where the MCP server returns:
-    - None or empty string
-    - String "None" or "null"
-    - Non-numeric strings
-    - Valid numeric strings or integers
-    """
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        # Handle string representations of null/None
-        if value.strip().lower() in ("", "none", "null"):
-            return None
-        try:
-            return int(value)
-        except ValueError:
-            logger.warning(f"Failed to parse '{value}' as integer, returning None")
-            return None
-    # For any other type, try conversion
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        logger.warning(f"Failed to parse '{value}' (type: {type(value).__name__}) as integer, returning None")
-        return None
+    def _resolve_candidate_ids(self, candidate_names: List[str]) -> Dict[int, str]:
+        """Map candidate clinic names to IDs using hardcoded map."""
+        resolved: Dict[int, str] = {}
+        for name in candidate_names:
+            cid = _hardcoded_clinic_id(name)
+            if cid is not None and cid not in resolved:
+                resolved[cid] = name
+        return resolved
 
 
-def _infer_doctor_from_text(text: str) -> Optional[str]:
-    """
-    Extract doctor name heuristically from user text, e.g. "دكتور ابانوب".
-    Supports capturing up to 3 tokens after the keyword.
-    """
-    if not text:
-        return None
+# ─────────────────────────────────────────────────────────────────────────────
+# Clinic inference from question text
+# (fallback when LLM router didn't extract a clinic)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    normalized = text.replace("ـ", "").strip()
-    # Capture sequences after "دكتور" / "د." / "د " (as a standalone token).
-    # Important: guard against false positives inside other words, e.g. "مواعيد <X>"
-    # contains the character "د" before a space, which previously matched "د\s+".
-    doctor_patterns = [
-        r"(?:^|\s)(?:دكتور|د\.?|د)\s+([\u0621-\u064A\w]+(?:\s+[\u0621-\u064A\w]+){0,2})",
-    ]
-    for pattern in doctor_patterns:
-        match = re.search(pattern, normalized, flags=re.IGNORECASE)
-        if match:
-            candidate = match.group(1)
-            candidate = _trim_punctuation(candidate)
-            candidate = _strip_leading_doctor_words(candidate)
-            candidate = _strip_trailing_clinic_words(candidate)
-            if candidate and _is_plausible_doctor_name(candidate):
-                return candidate
-    return None
-
-
-def _is_plausible_doctor_name(candidate: str) -> bool:
-    """
-    Guard against false positives like:
-      - "مين دكتور النهارده متاح..." (not a name)
-      - "دكتور مواعيد ..." (not a name)
-      - "دكتور أطفال" (specialty, not a name)
-      - "دكتور أطفال حالياً" (availability query about specialty)
-    """
-    if not candidate:
-        return False
-    tokens = [t for t in candidate.split() if t]
-    if not tokens:
-        return False
-
-    # Disallow common non-name prefixes used in availability questions
-    non_name_prefixes = {
-        "مين",
-        "من",
-        "النهارده",
-        "اليوم",
-        "بكره",
-        "امبارح",
-        "متاح",
-        "موجود",
-        "مواعيد",
-        "موعد",
-        "بعد",
-        "قبل",
-        "عند",
-        "في",
-        "فى",
-        "على",
-        "لحد",
-        "لغاية",
-        "الساعة",
-        "الساعه",
-        "مساءا",
-        "مساءً",
-        "صباحا",
-        "صباحًا",
-    }
-    if tokens[0].casefold() in non_name_prefixes:
-        return False
-
-    # If it's a single token and looks like a temporal word, reject.
-    if len(tokens) == 1 and tokens[0].casefold() in non_name_prefixes:
-        return False
-
-    # Reject if all tokens are non-name words (e.g., "النهارده متاح")
-    if all(t.casefold() in non_name_prefixes for t in tokens):
-        return False
-
-    # Specialty / clinic words: when "دكتور" is followed by one of these,
-    # the user is asking about a clinic/specialty, NOT a specific doctor.
-    # e.g. "دكتور أطفال حالياً" → specialty query, not a doctor named "أطفال".
-
-    # Reject if the first token is a specialty word (the user said "دكتور أطفال ...")
-    if tokens[0].casefold() in CLINIC_SPECIALTY_WORDS:
-        return False
-
-    # Also reject if removing non-name trailing words leaves only specialty words
-    # e.g. "أطفال حالياً" → first token "أطفال" is specialty → already caught above
-    # e.g. "أطفال متاح النهارده" → first token is specialty → caught above
-
-    # Require at least 2 tokens OR a token that is reasonably name-like (Arabic letters).
-    # This reduces chance of "النهارده" being treated as a name.
-    has_arabic = any(re.search(r"[\u0621-\u064A]", t) for t in tokens)
-    if not has_arabic:
-        return False
-    if len(tokens) < 2:
-        return False
-
-    return True
+_SERVICE_TO_CLINICS: List[Tuple[List[str], List[str]]] = [
+    (["رنين", "مرنانة", "مرنانه", "mri"], ["عيادة اشعه"]),
+    (["ماموجرام", "mammogram", "أشعة ثدي"], ["عيادة اشعه"]),
+    (["ديكسا", "dexa", "هشاشة عظام", "كثافة عظام"], ["عيادة اشعه"]),
+    (["pet scan", "بت سكان", "مسح ذري"], ["عيادة اشعه مقطعيه"]),
+    (["بانوراما", "باناراما", "سيفالوميتريك"], ["عيادة أسنان"]),
+    (["سكانر", "مقطعي", "ct"], ["عيادة اشعه مقطعيه"]),
+    (["سونار", "تلفزيوني", "دوبلر", "doppler", "ultrasound"], ["عيادة اشعه تلفزيونيه"]),
+    (["إكس راي", "x-ray", "xray", "أشعة عادية"], ["عيادة اشعه عاديه"]),
+    (["اشعة", "اشعه", "أشعة", "أشعه"], ["عيادة اشعه", "عيادة اشعه مقطعيه", "عيادة اشعه تلفزيونيه"]),
+    (["تقويم", "حشو", "خلع", "ضرس", "أسنان", "اسنان", "سن", "لثة"], ["عيادة أسنان"]),
+    (["كسر", "عظم", "مفصل", "خشونة", "ركبة", "كتف", "ورك"], ["عيادة عظام"]),
+    (["جرح", "خياطة", "ضمادة", "تغيير الجرح", "عملية", "زائدة", "مرارة"], ["عيادة جراحة"]),
+    (["عيون", "نظر", "نضارة", "عدسة", "شبكية"], ["عيادة رمد"]),
+    (["أنف", "أذن", "لوز", "جيوب", "سمع", "شخير"], ["عيادة أنف وأذن وحنجرة"]),
+    (["جلد", "بشرة", "حبوب", "حساسية جلد", "طفح"], ["عيادة جلدية"]),
+    (["أطفال", "اطفال", "طفل", "رضيع"], ["عيادة أطفال"]),
+    (["حمل", "ولادة", "نسا", "دورة", "رحم", "مبيض"], ["عيادة نسا وتوليد"]),
+    (["قلب", "ضغط", "شريان"], ["عيادة قلب"]),
+    (["صدر", "ربو", "رئة"], ["عيادة صدر"]),
+    (["أعصاب", "صداع", "دوخة", "تنميل", "شلل", "مخ"], ["عيادة أعصاب"]),
+    (["باطنة", "معدة", "قولون", "كبد", "هضم"], ["عيادة باطنة"]),
+    (["مسالك", "كلى", "بروستاتا", "مثانة", "حصى"], ["عيادة مسالك بولية"]),
+    (["سكر", "غدة", "هرمون", "درقية"], ["عيادة سكر وغدد صماء"]),
+    (["نفسية", "اكتئاب", "قلق", "ارق", "توتر"], ["عيادة نفسية"]),
+    (["علاج طبيعي", "فيزيوثيرابي", "تأهيل", "جلسات"], ["عيادة علاج طبيعي"]),
+    (["أورام", "سرطان", "كيماوي"], ["عيادة أورام"]),
+    (["بوتوكس", "فيلر", "تجميل"], ["عيادة جراحه تجميل"]),
+    (["تقسيط", "كاش", "الدفع", "بالكارت", "فيزا"], []),  # payment only → no specific clinic
+]
 
 
-def _detect_requested_intents(question: str, *, primary_intent: str, max_intents: int = 3) -> List[str]:
-    """
-    Detect multiple intents in a single user query (generic 2-3 combined asks),
-    e.g. "مواعيد + سعر" or "مين دكتور + مواعيد + سعر".
-    """
+def _infer_candidate_clinics(question: str) -> List[str]:
+    """Infer candidate clinic names from question text."""
     q = (question or "").casefold()
-
-    def has_any(patterns: List[str]) -> bool:
-        return any(re.search(p, q, flags=re.IGNORECASE) for p in patterns)
-
-    patterns = {
-        "who_is_present": [
-            r"مين\s+(?:اللي|اللى)?\s*(?:موجود(?:ين)?|متاح)",
-            r"مين\s+(?:اللي|اللى)?\s*موجود\s+النهارده",
-            r"مين\s+(?:اللي|اللى)?\s*موجود\s+بكره",
-            r"مين\s+(?:اللي|اللى)?\s*موجود\s+بكرة",
-        ],
-        "ask_price": [
-            r"\bسعر\b",
-            r"\bكشف\b",
-            r"\bالكشف\b",
-            r"\bبكام\b",
-            r"\bتكلف(?:ة|ه)?\b",
-            r"\bprice\b",
-            r"\bcost\b",
-            r"\bfee\b",
-        ],
-        "check_availability": [
-            r"\bمواعيد\b",
-            r"\bموعد\b",
-            r"\bمتاح\b",
-            r"\bموجود\b",
-            r"\bالنهارده\b",
-            r"\bاليوم\b",
-            r"\bجدول\b",
-            r"\bschedule\b",
-            r"\bavailable\b",
-        ],
-        "list_doctors": [
-            r"مين\s+دكتور",
-            r"مين\s+الدكتور",
-            r"\bالدكاترة\b",
-            r"\bاسماء\s+الدكاترة\b",
-            r"\bأسماء\s+الدكاترة\b",
-            r"\bdoctors?\b",
-        ],
-        "book_appointment": [
-            r"\bاحجز\b",
-            r"\bحجز\b",
-            r"\bbook\b",
-            r"\bappointment\b",
-        ],
-    }
-
-    canonical_order = ["who_is_present", "list_doctors", "check_availability", "ask_price", "book_appointment"]
-    found = [i for i in canonical_order if has_any(patterns[i])]
-
-    # who_is_present subsumes list_doctors + schedule; avoid redundant handler calls.
-    if "who_is_present" in found:
-        found = ["who_is_present"] + [i for i in found if i not in {"who_is_present", "list_doctors", "check_availability"}]
-
-    # Ensure primary is included and first.
-    if primary_intent and primary_intent not in found:
-        found.insert(0, primary_intent)
-    elif primary_intent and primary_intent in found:
-        found = [primary_intent] + [i for i in found if i != primary_intent]
-
-    # Dedup + cap (keep stable order)
-    out: List[str] = []
-    for i in found:
-        if i not in out:
-            out.append(i)
-        if len(out) >= max_intents:
-            break
-    return out
-
-
-def _is_who_is_present_query(question: str) -> bool:
-    q = (question or "").casefold()
-    # Original strict pattern: مين + directly + موجود/متاح
-    if re.search(r"مين\s+(?:اللي|اللى)?\s*(?:موجود(?:ين)?|متاح)", q):
-        return True
-    # Broader Ammya pattern: "مين دكتور X متاح" / "مين دكتور X موجود حاليا"
-    if re.search(r"مين\s+(?:دكتور|دكتوره?)\s+\S+.*?(?:متاح|موجود)", q):
-        return True
-    # "محتاج دكتور X حالياً" / "عايز دكتور X"
-    if re.search(r"(?:محتاج|عايز|عاوز)\s+(?:دكتور|دكتوره?)\s+\S+", q):
-        return True
-    return False
-
-
-_AR_WEEKDAY_TO_EN = {
-    "السبت": "saturday",
-    "سبت": "saturday",
-    "الأحد": "sunday",
-    "الاحد": "sunday",
-    "احد": "sunday",
-    "الاثنين": "monday",
-    "الاتنين": "monday",
-    "اثنين": "monday",
-    "الثلاثاء": "tuesday",
-    "التلات": "tuesday",
-    "ثلاثاء": "tuesday",
-    "الأربعاء": "wednesday",
-    "الاربعاء": "wednesday",
-    "الأربع": "wednesday",
-    "الاربع": "wednesday",
-    "الخميس": "thursday",
-    "خميس": "thursday",
-    "الجمعة": "friday",
-    "جمعه": "friday",
-    "جمعه": "friday",
-}
-
-
-def _infer_target_day_id(question: str, *, now_dt: datetime | None) -> int:
-    """
-    Infer MCP day_id (1=Saturday..7=Friday) from Arabic relative day expressions.
-    Defaults to "today" if not specified.
-    """
-    q = (question or "").casefold()
-
-    base_dt = now_dt or datetime.now(timezone(timedelta(hours=2)))
-
-    if any(tok in q for tok in ["بكره", "بكرة", "غدا", "غداً"]):
-        target = base_dt + timedelta(days=1)
-        return DAY_NAME_TO_ID[target.strftime("%A").lower()]
-
-    if any(tok in q for tok in ["النهارده", "نهارده", "اليوم"]):
-        return DAY_NAME_TO_ID[base_dt.strftime("%A").lower()]
-
-    for ar, en in _AR_WEEKDAY_TO_EN.items():
-        if ar in q:
-            return DAY_NAME_TO_ID[en]
-
-    # Fallback: treat as today
-    return DAY_NAME_TO_ID[base_dt.strftime("%A").lower()]
-
-
-def _filter_provider_list_by_clinic_id(provider_list: ProviderListPayload, clinic_id: int) -> ProviderListPayload:
-    filtered = [p for p in provider_list.providers if p.clinic_id == clinic_id]
-    return ProviderListPayload(providers=filtered)
-
-
-def _time_str_to_minutes(t: str) -> int:
-    """Convert a time string like '9:00 صباحًا', '1:00 مساءً', '13:00' to total minutes for sorting."""
-    if not t:
-        return 9999
-    # Detect PM markers (Arabic or English)
-    is_pm = any(m in t for m in ["مساء", "مساءً", "PM", "pm", "م"])
-    is_am = any(m in t for m in ["صباح", "صباحًا", "AM", "am", "ص"])
-    # Extract HH:MM
-    import re as _re
-    m = _re.search(r"(\d{1,2}):(\d{2})", t)
-    if not m:
-        return 9999
-    h, mn = int(m.group(1)), int(m.group(2))
-    # If 24h format (h >= 13), no AM/PM logic needed
-    if h >= 13:
-        return h * 60 + mn
-    # 12h format
-    if is_pm and h != 12:
-        h += 12
-    elif is_am and h == 12:
-        h = 0
-    return h * 60 + mn
-
-
-def _format_who_is_present(*, clinic_label: str, day_id: int, present: list[tuple[str, list[str]]]) -> str:
-    """Format a sorted, one-doctor-per-block context for who is present."""
-    # Sort by start time of first slot (earliest first)
-    def _sort_key(entry: tuple[str, list[str]]) -> int:
-        times = entry[1]
-        if not times:
-            return 9999
-        # times are strings like "9:00 صباحًا → 11:00 صباحًا"
-        first = times[0].split("→")[0].strip()
-        return _time_str_to_minutes(first)
-
-    sorted_present = sorted(present, key=_sort_key)
-
-    lines = [
-        f"قائمة الدكاترة الموجودين في عيادة {clinic_label} حسب بيانات السيستم (مرتبة حسب الوقت):",
-        "",
-    ]
-    for name, times in sorted_present:
-        lines.append(f"دكتور {name}")
-        if len(times) > 1:
-            for i, t in enumerate(times, 1):
-                start_end = t.replace(" → ", " لحد ")
-                label = "الفترة الأولى" if i == 1 else f"الفترة {'التانية' if i == 2 else 'ال' + str(i)}"
-                lines.append(f"- {label}: من {start_end}")
-        elif times:
-            start_end = times[0].replace(" → ", " لحد ")
-            lines.append(f"- من {start_end}")
-        lines.append("")
-    return "\n".join(lines)
-
-
-def _infer_clinic_from_context(state: ConversationState, question_text: str) -> Optional[str]:
-    """
-    Infer clinic name using specialty or raw question text when entity extraction misses it.
-    """
-    specialty = state.entities.specialty if state and state.entities else None
-    if specialty:
-        normalized = specialty.strip()
-        if normalized:
-            if normalized.startswith("عيادة"):
-                return normalized
-            return f"عيادة {normalized}".strip()
-
-    q = (question_text or "").casefold()
-    
-    # 1. Match "دكتور <specialty>" (e.g., "مين دكتور أطفال متاح")
-    m1 = re.search(r"(?:دكتور|دكتوره?|دكتورة)\s+([\u0621-\u064A]+)", q)
-    if m1:
-        possible_specialty = m1.group(1)
-        if possible_specialty in CLINIC_SPECIALTY_WORDS:
-            return f"عيادة {possible_specialty}"
-            
-    # 2. Match "محتاج/عايز/فين <specialty>" (e.g., "محتاج أسنان")
-    m2 = re.search(r"(?:محتاج|عايز|عاوز|فين)\s+([\u0621-\u064A]+)", q)
-    if m2:
-        possible_specialty = m2.group(1)
-        if possible_specialty in CLINIC_SPECIALTY_WORDS:
-            return f"عيادة {possible_specialty}"
-
-    inferred = _infer_phrase_after_keywords(
-        question_text,
-        keywords=["عيادة", "عياده", "clinic"],
-        max_words=4,
-    )
-    return inferred
-
-
-def _infer_phrase_after_keywords(
-    text: str,
-    keywords: List[str],
-    max_words: int = 3,
-) -> Optional[str]:
-    """
-    Given text, extract the phrase immediately following any of the provided keywords.
-    Useful for capturing "عيادة الأسنان" or "clinic oncology".
-    """
-    if not text:
-        return None
-
-    sanitized = text.replace("؟", "?").replace("،", ",")
-    for keyword in keywords:
-        pattern = rf"{keyword}\s+([\u0621-\u064A\w\s]+)"
-        match = re.search(pattern, sanitized, flags=re.IGNORECASE)
-        if not match:
-            continue
-
-        candidate = match.group(1)
-        candidate = re.split(r"[?.,!،]", candidate)[0]
-        words = candidate.split()
-        candidate = " ".join(words[:max_words]).strip()
-        if not candidate:
-            continue
-
-        # Ensure Arabic keywords keep the "عيادة" prefix for better matching
-        keyword_lower = keyword.lower()
-        if keyword_lower.startswith("عي"):
-            # Guard: "عيادة دكتور <name>" is NOT a clinic name; user likely means "the doctor's clinic".
-            head = (candidate.split()[0] if candidate.split() else "").casefold().strip(".")
-            if head in {"دكتور", "د", "dr", "doctor"}:
-                continue
-            if not candidate.startswith("عيادة"):
-                candidate = f"عيادة {candidate}".strip()
-            else:
-                candidate = candidate
-        return candidate
-
-    return None
-
-
-def _trim_punctuation(value: str) -> str:
-    """Remove trailing punctuation and extra whitespace from a captured phrase."""
-    return value.strip(" \t\n\r?.,!،") if value else value
-
-
-def _strip_leading_doctor_words(value: str) -> str:
-    """Remove leading tokens such as 'دكتور' or 'Dr' from a captured phrase."""
-    if not value:
-        return value
-    tokens = value.split()
-    while tokens:
-        head = tokens[0].replace("ـ", "")
-        head_lower = head.casefold().strip(".")
-        if head_lower in {"دكتور", "دكتوره", "د", "dr", "doctor"}:
-            tokens.pop(0)
-            continue
-        break
-    return " ".join(tokens)
-
-
-def _strip_trailing_clinic_words(value: str) -> str:
-    """Remove trailing words such as 'لعيادة' that leak into doctor captures."""
-    if not value:
-        return value
-    tokens = value.split()
-    while tokens:
-        tail = tokens[-1].replace("ـ", "")
-        tail_lower = tail.casefold()
-        if any(
-            keyword in tail_lower
-            for keyword in ("عياد", "clinic")
-        ):
-            tokens.pop()
-            continue
-        break
-    return " ".join(tokens)
-
-
-def _format_service_prices(
-    response: ServicePriceResponse,
-    provider_entry: Optional[ProviderRecord],
-) -> str:
-    doctor_name = (
-        (provider_entry.provider_name_ar or provider_entry.provider_name_en)
-        if provider_entry
-        else None
-    )
-    clinic_name = (
-        (provider_entry.clinic_name_ar or provider_entry.clinic_name_en)
-        if provider_entry
-        else None
-    )
-
-    header_parts = ["بيانات الأسعار الرسمية من النظام."]
-    if clinic_name:
-        header_parts.append(f"العيادة: {clinic_name}.")
-    if doctor_name:
-        header_parts.append(f"الدكتور: {doctor_name}.")
-
-    lines = header_parts + ["\nالخدمات:"]
-    for service in response.services:
-        name = service.service_name_ar or service.service_name_en or "خدمة بدون اسم"
-        price = f"{service.price:.2f}" if service.price is not None else "غير متاح"
-        currency = service.currency or "EGP"
-        lines.append(f"- {name}: {price} {currency}")
-
-    return "\n".join(lines)
-
-
-def _format_schedule(
-    response: ProviderScheduleResponse,
-    provider_entry: Optional[ProviderRecord],
-) -> str:
-    doctor_name = (
-        (provider_entry.provider_name_ar or provider_entry.provider_name_en)
-        if provider_entry
-        else None
-    )
-    clinic_name = (
-        (provider_entry.clinic_name_ar or provider_entry.clinic_name_en)
-        if provider_entry
-        else None
-    )
-
-    header = ["جبتلك المواعيد الرسمية من النظام."]
-    if clinic_name:
-        header.append(f"العيادة: {clinic_name}.")
-    if doctor_name:
-        header.append(f"الدكتور: {doctor_name}.")
-
-    def _normalize_ampm_for_ar(value: str) -> str:
-        """Prefer صباحًا/مساءً over ص/م or AM/PM in schedule display strings."""
-        if not value:
-            return value
-        out = value
-        out = re.sub(r"(?i)\bA\.?M\.?\b", "صباحًا", out)
-        out = re.sub(r"(?i)\bP\.?M\.?\b", "مساءً", out)
-        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*ص\b", r"\1 صباحًا", out)
-        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*م\b", r"\1 مساءً", out)
-        out = re.sub(r"صباح(?:ا|اً|ً|ًا)", "صباحًا", out)
-        out = re.sub(r"مساء(?:ا|اً|ً|ًا)", "مساءً", out)
-        return out
-
-    grouped: Dict[str, List[str]] = defaultdict(list)
-    for slot in response.slots:
-        day = slot.day_name or f"اليوم #{slot.day_id}"
-        start = _normalize_ampm_for_ar(slot.shift_start or "غير محدد")
-        end = _normalize_ampm_for_ar(slot.shift_end or "غير محدد")
-        grouped[day].append(f"{start} → {end}")
-
-    for day, entries in grouped.items():
-        header.append(f"\n{day}:")
-        for entry in entries:
-            header.append(f"- {entry}")
-
-    return "\n".join(header)
-
-
-def _format_provider_list(provider_list: ProviderListPayload) -> str:
-    lines = ["قائمة الدكاترة المتاحة حسب بيانات السيستم:"]
-    for record in provider_list.providers:
-        doctor = record.provider_name_ar or record.provider_name_en or "دكتور"
-        clinic = record.clinic_name_ar or record.clinic_name_en or "عيادة غير معروفة"
-        specialty = record.specialty or "التخصص غير محدد"
-        lines.append(f"- {doctor} في {clinic} — تخصص: {specialty}")
-    return "\n".join(lines)
-
-
-def _filter_provider_list(
-    provider_list: ProviderListPayload,
-    *,
-    clinic_name: Optional[str],
-    specialty: Optional[str],
-) -> ProviderListPayload:
-    filtered: List[ProviderRecord] = []
-    for record in provider_list.providers:
-        if clinic_name and not record.matches_clinic(clinic_name):
-            continue
-        if specialty and record.specialty and specialty.casefold() not in record.specialty.casefold():
-            continue
-        filtered.append(record)
-    return ProviderListPayload(providers=filtered or provider_list.providers[:10])
-
-
-def _format_multi_provider_schedule(
-    clinic_name: str,
-    schedules: List[Tuple[ProviderRecord, ProviderScheduleResponse]],
-) -> str:
-    """Format all providers' schedules sorted by earliest slot start time, one block per doctor."""
-
-    def _normalize_ampm_for_ar(value: str) -> str:
-        """Prefer صباحًا/مساءً over ص/م or AM/PM."""
-        if not value:
-            return value
-        out = value
-        out = re.sub(r"(?i)\bA\.?M\.?\b", "صباحًا", out)
-        out = re.sub(r"(?i)\bP\.?M\.?\b", "مساءً", out)
-        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*ص\b", r"\1 صباحًا", out)
-        out = re.sub(r"(\d{1,2}[:.]\d{2})\s*م\b", r"\1 مساءً", out)
-        return out
-
-    # Pre-process: build (provider, grouped_slots_by_day) and compute earliest start
-    processed: List[Tuple[ProviderRecord, Dict[str, List[str]], int]] = []
-    for provider, response in schedules:
-        grouped: Dict[str, List[str]] = defaultdict(list)
-        earliest = 9999
-        for slot in response.slots:
-            day = slot.day_name or f"اليوم #{slot.day_id}"
-            start_raw = slot.shift_start or ""
-            end_raw = slot.shift_end or ""
-            start = _normalize_ampm_for_ar(start_raw)
-            end = _normalize_ampm_for_ar(end_raw)
-            if start and end:
-                grouped[day].append((start, end))
-                slot_minutes = _time_str_to_minutes(start_raw or start)
-                if slot_minutes < earliest:
-                    earliest = slot_minutes
-        processed.append((provider, grouped, earliest))
-
-    # Sort by earliest shift start time
-    processed.sort(key=lambda x: x[2])
-
-    lines = [f"مواعيد دكاترة {clinic_name} المتاحين من النظام (مرتبة حسب الوقت):", ""]
-
-    for provider, grouped, _ in processed:
-        doctor_name = provider.provider_name_ar or provider.provider_name_en or "دكتور"
-        lines.append(f"دكتور {doctor_name}")
-
-        # Collect all slots across all days for this provider
-        all_slots: List[Tuple[str, str]] = []
-        for day, slot_pairs in grouped.items():
-            for start, end in slot_pairs:
-                all_slots.append((start, end))
-
-        if len(all_slots) == 1:
-            start, end = all_slots[0]
-            lines.append(f"- من {start} لحد {end}")
-        elif len(all_slots) > 1:
-            for i, (start, end) in enumerate(all_slots, 1):
-                label = "الفترة الأولى" if i == 1 else f"الفترة {'التانية' if i == 2 else 'ال' + str(i)}"
-                lines.append(f"- {label}: من {start} لحد {end}")
-        lines.append("")
-
-    return "\n".join(lines)
+    candidates: List[str] = []
+    added: set = set()
+    for keywords, clinic_names in _SERVICE_TO_CLINICS:
+        if any(kw in q for kw in keywords):
+            for cn in clinic_names:
+                if cn not in added:
+                    candidates.append(cn)
+                    added.add(cn)
+    return candidates

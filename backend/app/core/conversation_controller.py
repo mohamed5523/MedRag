@@ -21,6 +21,8 @@ def _normalize_arabic_text(text: str) -> str:
         .replace("آ", "ا")
         .replace("ى", "ي")
         .replace("ة", "ه")
+        .replace("ئ", "ي")
+        .replace("ؤ", "و")
     )
     # strip punctuation/symbols (keep letters/numbers/spaces)
     t = re.sub(r"[^\w\u0600-\u06FF\s]", " ", t, flags=re.UNICODE)
@@ -338,6 +340,21 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
     has_doc = _explicit_doctor_mention(query_text)
     has_clinic = _explicit_clinic_mention(query_text)
 
+    # 1. Complete topic change detection (explicit cancellations)
+    query_lower = query_text.casefold()
+    cancellations = ["لا ثواني", "لا استنى", "غيرت رأيي", "بلاش", "لا مش", "لأ مش", "لغى", "إلغاء", "الغاء", "سيبك من"]
+    if any(cancel in query_lower for cancel in cancellations):
+        if hasattr(entities, "doctor"):
+             entities.doctor = None
+        if hasattr(entities, "provider_id"):
+             entities.provider_id = None
+        if hasattr(entities, "clinic"):
+             entities.clinic = None
+        if hasattr(entities, "clinic_id"):
+             entities.clinic_id = None
+        if hasattr(entities, "specialty"):
+             entities.specialty = None
+
     if has_doc and not has_clinic:
         if hasattr(entities, "clinic"):
             entities.clinic = None
@@ -365,7 +382,6 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
             "مين", "الدكاترة", "دكاترة", "اسماء", "موجود", "موجودين",
             "النهارده", "بكره", "المواعيد", "عايز", "عايزه", "محتاج",
         }
-        query_lower = query_text.strip()
         if any(kw in query_lower for kw in _generic_intent_keywords):
             if hasattr(entities, "doctor"):
                 entities.doctor = None
@@ -400,11 +416,11 @@ def format_provider_disambiguation_prompt(candidates: list[dict[str, Any]]) -> s
             "أو اكتب الاسم بالكامل بشكل صحيح."
         )
 
-    parts = ["فيه أكتر من دكتور بنفس الاسم. اختار رقم من دول"]
+    parts = ["فيه أكتر من دكتور بنفس الاسم. اختار رقم من دول:"]
     for i, n in enumerate(names, start=1):
-        parts.append(f"{i} {n}")
+        parts.append(f"{i} - {n}")
     parts.append("اكتب رقم الاختيار أو اكتب الاسم كامل")
-    return " ".join(parts).strip()
+    return "\n".join(parts).strip()
 
 
 def format_clinic_disambiguation_prompt(candidates: list[dict[str, Any]]) -> str:
@@ -431,11 +447,11 @@ def format_clinic_disambiguation_prompt(candidates: list[dict[str, Any]]) -> str
             "أو اكتب الاسم بالكامل بشكل صحيح."
         )
 
-    parts = ["فيه أكتر من عيادة بنفس الاسم. اختار رقم من دول"]
+    parts = ["فيه أكتر من عيادة بنفس الاسم. اختار رقم من دول:"]
     for i, n in enumerate(names, start=1):
-        parts.append(f"{i} {n}")
+        parts.append(f"{i} - {n}")
     parts.append("اكتب رقم الاختيار أو اكتب الاسم كامل")
-    return " ".join(parts).strip()
+    return "\n".join(parts).strip()
 
 
 def materialize_intent_query(

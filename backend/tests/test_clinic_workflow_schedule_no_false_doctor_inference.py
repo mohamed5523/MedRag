@@ -37,7 +37,7 @@ class FakeMCPClientNoDoctorInference:
             slots=[
                 ScheduleSlot(
                     clinic_id=clinic_id,
-                    provider_id=None,
+                    provider_id=9001,
                     day_id=getattr(self, "_expected_day_id", 1),
                     day_name="Saturday",
                     shift_start="09:00",

@@ -150,6 +150,15 @@ class TextToSpeech:
 
         except Exception as e:
             logger.error(f"TTS conversion failed ({selected_provider}): {str(e)}")
+            
+            # Fallback logic: If ElevenLabs or Azure fails, try OpenAI if it's available and not already the primary
+            if selected_provider != "openai" and self.openai_client:
+                logger.info(f"Attempting fallback to OpenAI TTS after {selected_provider} failure...")
+                try:
+                    return await self._openai_synthesize(text, tts_settings.OPENAI_TTS_VOICE)
+                except Exception as fallback_err:
+                    logger.error(f"TTS fallback to OpenAI failed: {str(fallback_err)}")
+            
             raise TextToSpeechError(f"Text-to-speech conversion failed: {str(e)}") from e
 
     def _azure_output_format_enum(self, fmt_str: str):

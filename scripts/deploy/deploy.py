@@ -12,9 +12,16 @@ REMOTE_DIR = "/opt/heal-query-hub"
 
 # Keys to extract from different files
 BACKEND_KEYS = [
+    # OpenAI
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
+    # Groq
     "GROQ_API_KEY",
+    "GROQ_WHISPER_MODEL",
+    # ASR
+    "ASR_PROVIDER",
+    "ELEVENLABS_ASR_MODEL",
+    # TTS
     "TTS_PROVIDER",
     "OPENAI_TTS_MODEL",
     "OPENAI_TTS_VOICE",
@@ -31,14 +38,25 @@ BACKEND_KEYS = [
     "AZURE_TTS_REGION",
     "AZURE_TTS_OUTPUT_FORMAT",
     "AZURE_TTS_VOICE",
+    # WhatsApp
     "WHATSAPP_TOKEN",
     "WHATSAPP_PHONE_NUMBER_ID",
     "WHATSAPP_VERIFY_TOKEN",
+    "ENABLE_PENDING_ACTION",
+    "ENABLE_SYMPTOM_TRIAGE",
+    # Supabase
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    # Timezone
     "DEFAULT_TZ",
+    # Storage
     "CHROMA_DB_PATH",
     "UPLOAD_DIR",
     "MAX_FILE_SIZE_MB",
+    # Logging
     "LOG_LEVEL",
+    # Clinic API (MCP)
     "CLINIC_PROVIDER_LIST_URL",
     "CLINIC_PROVIDER_SCHEDULE_URL",
     "CLINIC_SERVICE_PRICE_URL",
@@ -46,7 +64,12 @@ BACKEND_KEYS = [
     "CLINIC_API_PASSWORD",
     "REQUEST_TIMEOUT",
     "MAX_RETRIES",
-    "REQUEST_RETRY_BACKOFF"
+    "REQUEST_RETRY_BACKOFF",
+    # Session / Redis
+    "REDIS_NAMESPACE",
+    "SESSION_TTL_MINUTES",
+    "CONVERSATION_HISTORY_LENGTH",
+    "TTL_POLICY",
 ]
 
 FRONTEND_KEYS = [

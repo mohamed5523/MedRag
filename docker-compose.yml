@@ -31,7 +31,10 @@ services:
       - REDIS_PORT=6379
       - MCP_BASE_URL=http://mcp-server:8000
     volumes:
+      - ./backend/app:/app/app
+      - ./backend/run.py:/app/run.py
       - ./backend/uploads:/app/uploads
+      - ./.cursor:/home/morad/Projects/heal-query-hub/.cursor
     ports:
       - "8000:8000"
     networks:
@@ -61,6 +64,8 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8000
       - PYTHONUNBUFFERED=1
+    volumes:
+      - ./.cursor:/home/morad/Projects/heal-query-hub/.cursor
     command: [ "python", "clinic_server.py" ]
     ports:
       - "8020:8000"

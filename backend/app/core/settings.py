@@ -72,8 +72,8 @@ class MCPSettings(BaseSettings):
     api_key: Optional[str] = None
     basic_auth_username: Optional[str] = None
     basic_auth_password: Optional[str] = None
-    request_timeout_seconds: float = 20.0
-    connect_timeout_seconds: float = 5.0
+    request_timeout_seconds: float = 60.0
+    connect_timeout_seconds: float = 10.0
     max_retries: int = 2
     retry_backoff_seconds: float = 1.5
 
@@ -85,14 +85,6 @@ class MCPSettings(BaseSettings):
                 password=self.basic_auth_password or "",
             )
         return None
-
-
-@lru_cache(maxsize=1)
-def get_mcp_settings() -> MCPSettings:
-    """Return a cached settings instance."""
-
-    return MCPSettings()
-
 
 
 @lru_cache(maxsize=1)

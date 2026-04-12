@@ -100,9 +100,9 @@ def _format_provider_clinic_mismatch_prompt(
     parts.append("لقيت دكاترة بنفس الاسم لكن في عيادات مختلفة. اختار رقم:")
     for i, (name, clinic) in enumerate(items, start=1):
         suffix = f" — {clinic}" if clinic else ""
-        parts.append(f"{i} {name}{suffix}")
+        parts.append(f"{i} - {name}{suffix}")
     parts.append("اكتب رقم الاختيار")
-    return " ".join(parts).strip()
+    return "\n".join(parts).strip()
 
 def _apply_pending_action_resolution_helper(
     pending_action_type: str | None,
@@ -114,11 +114,35 @@ def _apply_pending_action_resolution_helper(
 
 @router.get("/webhook/whatsapp/health")
 async def whatsapp_health() -> Dict[str, Any]:
+    """Health check for the WhatsApp integration.
+    
+    If has_token or has_phone_id are False, update WHATSAPP_TOKEN and 
+    WHATSAPP_PHONE_NUMBER_ID in backend/.env and restart the server.
+    Tokens for sandbox/dev apps expire every 24h — use a permanent
+    System User token from Meta Business Manager for production.
+    """
+    token = WHATSAPP_TOKEN or ""
+    # Heuristic: dev tokens from Meta are very long (200+ chars); permanent system
+    # user tokens are shorter (~180 chars). We surface this as a hint only.
+    token_type_hint = "unknown"
+    if token:
+        token_type_hint = "likely_dev_short_lived" if len(token) > 200 else "likely_permanent"
+
     return {
-        "status": "healthy",
+        "status": "healthy" if (WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID) else "degraded",
         "has_token": bool(WHATSAPP_TOKEN),
         "has_phone_id": bool(WHATSAPP_PHONE_NUMBER_ID),
-        "mcp_enabled": True
+        "has_verify_token": bool(WHATSAPP_VERIFY_TOKEN),
+        "token_type_hint": token_type_hint,
+        "features": {
+            "read_receipts": True,
+            "typing_indicator": True,
+            "voice_transcription": True,
+            "tts_audio_reply": tts_service is not None,
+            "mcp_clinic_tools": True,
+            "disambiguation": ENABLE_PENDING_ACTION,
+            "symptom_triage": ENABLE_SYMPTOM_TRIAGE,
+        },
     }
 
 
@@ -158,6 +182,9 @@ async def process_whatsapp_message(message: Dict[str, Any], from_number: str) ->
         if not user_text:
             await _send_text_message(from_number, "I received a message but couldn't understand it.")
             return
+
+        # Send typing indicator immediately so the user sees "..." while we process
+        await _send_typing_indicator(from_number)
 
         # ---------------------------------------------------------
         # Core Chat Logic (Mirrors chat.py)
@@ -344,7 +371,12 @@ async def process_whatsapp_message(message: Dict[str, Any], from_number: str) ->
                 
                 # General Failure
                 logger.error(f"MCP Error: {e}")
-                answer = "معلش، فيه مشكلة في الاتصال بنظام العيادات حاليًا. ممكن تجرب تاني بعد شوية؟"
+                err_str = str(e).strip()
+                # If error is English, provide an Arabic fallback. Otherwise, use what the workflow threw.
+                if err_str and not err_str.startswith("Intent "):
+                    answer = err_str
+                else:
+                    answer = "معلش، فيه مشكلة في الاتصال بنظام العيادات حاليًا. ممكن تجرب تاني بعد شوية؟"
 
         else:
             # RAG / General Flow
@@ -430,9 +462,13 @@ async def whatsapp_handler(request: Request, background_tasks: BackgroundTasks) 
             # Mark as processed with 24h TTL
             redis_client.set(dedupe_key, "1", ex=86400)
 
-        # Offload processing to background task using FastAPI BackgroundTasks
+        # Mark incoming message as read immediately (shows blue double-tick in WhatsApp UI)
+        if message_id:
+            background_tasks.add_task(_mark_message_read, from_number, message_id)
+
+        # Offload heavy processing to background task to avoid Meta's 20s timeout
         background_tasks.add_task(process_whatsapp_message, message, from_number)
-        
+
         # Immediately acknowledge receipt to WhatsApp to prevent timeout/retries
         return Response(content="Message queued", status_code=200)
 
@@ -508,6 +544,55 @@ async def _send_audio_message(to_number: str, audio_bytes: bytes) -> None:
                 logger.error(f"WhatsApp audio message send failed: {response.status_code} - {response.text}")
     except Exception as e:
         logger.warning(f"Audio send failed: {e}")
+
+async def _mark_message_read(from_number: str, message_id: str) -> None:
+    """Mark an incoming WhatsApp message as read — shows blue double-tick (✓✓) to sender."""
+    if not (WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID):
+        return
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    json_data = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+    }
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            await client.post(
+                f"https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_NUMBER_ID}/messages",
+                headers=headers,
+                json=json_data,
+            )
+        except Exception as e:
+            logger.debug(f"Mark-read call failed (non-critical): {e}")
+
+
+async def _send_typing_indicator(to_number: str) -> None:
+    """Send a typing indicator so the user sees '...' in WhatsApp while the bot processes."""
+    if not (WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID):
+        return
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    json_data = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "typing",
+        "status": "on",
+    }
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            await client.post(
+                f"https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_NUMBER_ID}/messages",
+                headers=headers,
+                json=json_data,
+            )
+        except Exception as e:
+            logger.debug(f"Typing indicator call failed (non-critical): {e}")
+
 
 async def _transcribe_audio_bytes(audio_bytes: bytes) -> str:
     """Transcribe audio using ElevenLabs Scribe (default) or Groq Whisper based on ASR_PROVIDER."""

@@ -21,8 +21,8 @@ def test_format_provider_disambiguation_prompt_multi_candidate_is_numbered_list(
         [{"name_ar": "أحمد علي"}, {"name_ar": "أحمد محمد"}]
     )
     assert "فيه أكتر من دكتور" in prompt
-    assert "1 أحمد علي" in prompt
-    assert "2 أحمد محمد" in prompt
+    assert "1 - أحمد علي" in prompt
+    assert "2 - أحمد محمد" in prompt
 
 
 def test_apply_pending_action_resolution_provider_disambiguation_materializes_query() -> None:
@@ -80,8 +80,8 @@ def test_format_clinic_disambiguation_prompt_multi_candidate_is_numbered_list() 
         [{"clinic_name": "عيادة نسا وتوليد"}, {"clinic_name": "عيادة نسا"}]
     )
     assert "فيه أكتر من عيادة" in prompt
-    assert "1 عيادة نسا وتوليد" in prompt
-    assert "2 عيادة نسا" in prompt
+    assert "1 - عيادة نسا وتوليد" in prompt
+    assert "2 - عيادة نسا" in prompt
 
 
 def test_apply_pending_action_resolution_clinic_disambiguation_materializes_query() -> None:

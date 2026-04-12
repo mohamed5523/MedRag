@@ -1,5 +1,6 @@
 """Static MCP Server for Clinic Management System."""
 from __future__ import annotations
+import logging
 
 import json
 import os
@@ -23,6 +24,8 @@ from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
+
+logger = logging.getLogger(__name__)
 
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
@@ -207,6 +210,7 @@ async def get_clinic_provider_list() -> str:
     raw = await _fetch_clinic_provider_list()
     try:
         data = json.loads(raw)
+        logger.info(f"MCP API Response: {len(data.get('data', []))} providers returned")
         return _format_mcp_response(data, "Clinics and Providers")
     except Exception:
         return raw
@@ -235,6 +239,7 @@ async def get_clinic_provider_schedule(
     dateTo: str,
     providerid: Optional[int] = None
 ) -> str:
+    logger.info(f"MCP Tool Call: get_clinic_provider_schedule(clinicid={clinicid}, dateFrom={dateFrom}, dateTo={dateTo}, providerid={providerid})")
     """Get clinic provider schedule information.
     
     CRITICAL INSTRUCTION: You MUST output the results to the user as a structured list (e.g. bullet points). DO NOT summarize into a paragraph. You MUST list EVERY SINGLE DOCTOR returned in the data. DO NOT omit or skip any doctor, and always include their exceptions or variations (e.g. 'معتذر' or 'بديل'). 
@@ -244,8 +249,8 @@ async def get_clinic_provider_schedule(
     
     Parameters:
         clinicid (int, required): The Clinic ID you need to retrieve data for
-        dateFrom (str, required): The start date for the schedule query (YYYY-MM-DD or similar supported format)
-        dateTo (str, required): The end date for the schedule query (YYYY-MM-DD or similar supported format)
+        dateFrom (str, required): The start date for the schedule query. MUST BE FORMATTED AS DD/MM/YYYY EXACTLY.
+        dateTo (str, required): The end date for the schedule query. MUST BE FORMATTED AS DD/MM/YYYY EXACTLY.
         providerid (int, optional): Specific provider doctor ID to filter results
     
     Returns:
@@ -604,9 +609,19 @@ def _match_single_token(
     top_matches = strong[:top_k]
     first_name_matches = [m for m in top_matches if m.matched_by_first_name]
 
-    # Case 1: exactly one strong first-name match
-    if len(first_name_matches) == 1 and first_name_matches[0].score >= 0.8:
-        best = first_name_matches[0]
+    # Deduplicate first-name matches by provider_id:
+    # The same doctor can appear in multiple clinics; treat all rows with the
+    # same provider_id as a single person.
+    seen_pids: set = set()
+    unique_first_name_providers: list = []
+    for m in first_name_matches:
+        if m.provider_id not in seen_pids:
+            seen_pids.add(m.provider_id)
+            unique_first_name_providers.append(m)
+
+    # Case 1: exactly one unique doctor (by provider_id) matching as first name
+    if len(unique_first_name_providers) == 1 and unique_first_name_providers[0].score >= 0.8:
+        best = unique_first_name_providers[0]
         return MatchResponse(
             status=MatchStatus.UNAMBIGUOUS_MATCH,
             message=f"تم العثور على دكتور واحد مطابق للاسم '{token}'.",
@@ -615,8 +630,22 @@ def _match_single_token(
             candidates=top_matches,
         )
 
-    # Case 2: multiple first-name matches → ask for more info
-    if len(first_name_matches) >= 2:
+    # Case 2: multiple unique providers matched as first name.
+    # But if the best score clearly dominates (score >= 0.8 AND gap >= 0.15),
+    # the extra matches are fuzzy false-positives (e.g., "ساندرا" ~matching "ساندي").
+    # Treat the top scorer as the unambiguous answer.
+    if len(unique_first_name_providers) >= 2:
+        best = unique_first_name_providers[0]
+        second = unique_first_name_providers[1]
+        if best.score >= 0.8 and (best.score - second.score) >= 0.15:
+            return MatchResponse(
+                status=MatchStatus.UNAMBIGUOUS_MATCH,
+                message=f"تم العثور على دكتور واحد مطابق للاسم '{token}'.",
+                query_tokens=[token],
+                best_match=best,
+                candidates=top_matches,
+            )
+        # Genuinely multiple doctors share this first name → ask for more info
         return MatchResponse(
             status=MatchStatus.AMBIGUOUS_NEED_MORE_INFO,
             message=(
@@ -765,11 +794,19 @@ def _match_multi_token(
     top_matches = strong[:top_k]
     best = top_matches[0]
 
+    # Deduplicate by provider_id: the same doctor in multiple clinics is one person.
+    seen_pids_multi: set = set()
+    unique_providers: list = []
+    for m in top_matches:
+        if m.provider_id not in seen_pids_multi:
+            seen_pids_multi.add(m.provider_id)
+            unique_providers.append(m)
+
     # Decide ambiguity vs unambiguous
-    if len(top_matches) == 1 or (
-        len(top_matches) > 1
+    if len(unique_providers) == 1 or (
+        len(unique_providers) > 1
         and best.score >= 0.8
-        and (best.score - top_matches[1].score) >= 0.1
+        and (best.score - unique_providers[1].score) >= 0.1
     ):
         return MatchResponse(
             status=MatchStatus.UNAMBIGUOUS_MATCH,
@@ -779,7 +816,7 @@ def _match_multi_token(
             candidates=top_matches,
         )
 
-    # Multiple close matches → ambiguous
+    # Multiple distinct doctors → ambiguous
     return MatchResponse(
         status=MatchStatus.AMBIGUOUS_NEED_MORE_INFO,
         message=(
@@ -1058,11 +1095,15 @@ async def providers_pricing_route(request: Request) -> Response:
     except (ValueError, TypeError):
         return JSONResponse({"error": "clinicid query parameter is required and must be an integer"}, status_code=400)
 
-    provider_id_param = params.get("providerid")
+    provider_id_param = (
+        params.get("providerId")
+        or params.get("providerid")
+        or params.get("provider_id")
+    )
     try:
         provider_id = int(provider_id_param) if provider_id_param is not None else None
     except ValueError:
-        return JSONResponse({"error": "providerid must be an integer"}, status_code=400)
+        return JSONResponse({"error": "providerId must be an integer"}, status_code=400)
 
     data = await _fetch_service_price(
         clinicid=clinic_id,

@@ -27,9 +27,8 @@ const PatientDashboard = () => {
   const initialGreetingText = (() => {
     const now = new Date();
     const hourEEST = (now.getUTCHours() + 3) % 24; // EEST = UTC+3
-    const greeting = hourEEST < 12 ? 'صَبَاح الخِير' : 'مَسَاء الخِير';
-    return `${greeting} يا أفندم، مع حضرتك المساعد الشخصي، اسمي كيمت. إزاي أقدر أساعدك النهاردة؟`;
-    // return `${greeting} يا أَفَندِم، مَع حَضْرِتِك المُساعِد الشَّخصِي، وَاِسمِي كيمِت، مِن مُستَشفَى مار مَرقُس. مُمكِن أَساعِد حَضْرِتِك إِزَّاي؟`;
+    const greeting = hourEEST < 12 ? 'صباح الخير' : 'مساء الخير';
+    return `${greeting}، مع حضرتك المساعد الشخصي`;
   })();
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -42,9 +41,18 @@ const PatientDashboard = () => {
   const [inputMessage, setInputMessage] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
-  const [canAutoplay, setCanAutoplay] = useState(false);
   const [userGender, setUserGender] = useState<'male' | 'female'>('male');
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isLoading]);
   const generateSessionId = () => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return `session_${crypto.randomUUID()}`;
@@ -185,19 +193,19 @@ const PatientDashboard = () => {
   const generateBotResponse = (userMessage: string): string => {
     const message = userMessage.toLowerCase();
 
-    if (message.includes('doctor') || message.includes('physician')) {
-      return "I found several doctors in our system. Dr. Sarah Johnson is available for cardiology consultations on weekdays 9-5. Dr. Michael Chen specializes in orthopedics and has openings this Thursday. Would you like more details about any specific doctor?";
+    if (message.includes('doctor') || message.includes('physician') || message.includes('دكتور') || message.includes('طبيب') || message.includes('دكتورة')) {
+      return "عذراً، في مشكلة حالياً في النظام ومش قادر أجيب بيانات الدكاترة. ممكن تحاول تسألني تاني كمان شوية؟";
     }
 
-    if (message.includes('appointment') || message.includes('schedule')) {
-      return "I can help you with appointment information. Currently, we have availability with Dr. Johnson tomorrow at 2:30 PM and Dr. Chen on Friday at 10:00 AM. Which would work better for you?";
+    if (message.includes('appointment') || message.includes('schedule') || message.includes('ميعاد') || message.includes('مواعيد') || message.includes('حجز')) {
+      return "عذراً، مش قادر أوصل لجدول المواعيد دلوقتي عشان في ضغط على النظام. ممكن تجرب تحجز عن طريق الاتصال بالعيادة أو تسألني تاني كمان شوية.";
     }
 
-    if (message.includes('emergency') || message.includes('urgent')) {
-      return "For medical emergencies, please call 911 immediately. For urgent but non-emergency situations, our urgent care is open 24/7 at the main hospital building, Level 2.";
+    if (message.includes('emergency') || message.includes('urgent') || message.includes('طوارئ') || message.includes('حادث') || message.includes('نزيف') || message.includes('كسر') || message.includes('سخونية')) {
+      return "لو دي حالة طوارئ، أرجوك اتوجه قسم الطوارئ في المستشفى فوراً أو اتصل بالإسعاف على رقم 123.";
     }
 
-    return "I understand you're asking about '" + userMessage + "'. Based on our hospital database, I'd be happy to help you find more specific information. Could you please provide more details about what you're looking for?";
+    return "عذراً، حصل مشكلة ومش قادر أجاوب على سؤالك بخصوص المواضيع دي دلوقتي. ممكن تحاول تسألني تاني كمان شوية أو تتصل بالرقم الموحد للمستشفى.";
   };
 
   const handleSendMessage = async () => {
@@ -213,6 +221,7 @@ const PatientDashboard = () => {
     setMessages(prev => [...prev, userMessage]);
     const outgoing = inputMessage;
     setInputMessage("");
+    setIsLoading(true);
 
     try {
       const activeSessionId = ensureSessionId();
@@ -246,10 +255,8 @@ const PatientDashboard = () => {
       };
       setMessages(prev => [...prev, botMessage]);
 
-      // Auto-play audio if available
-      if (data.has_audio && data.audio_data) {
-        setTimeout(() => playAudio(botMessage.id, data.audio_data), 500);
-      }
+      // Auto-play audio was removed at user request.
+      // Audio can still be played by clicking the sound icon in the message bubble.
     } catch (err) {
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -262,6 +269,8 @@ const PatientDashboard = () => {
         title: "Using demo responses",
         description: "Backend not reachable; falling back to mock answers.",
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -410,16 +419,7 @@ const PatientDashboard = () => {
     }
   };
 
-  // Detect first user interaction to enable autoplay (browser autoplay policy)
-  useEffect(() => {
-    const enable = () => setCanAutoplay(true);
-    window.addEventListener('pointerdown', enable, { once: true } as AddEventListenerOptions);
-    window.addEventListener('keydown', enable, { once: true } as AddEventListenerOptions);
-    return () => {
-      window.removeEventListener('pointerdown', enable);
-      window.removeEventListener('keydown', enable);
-    };
-  }, []);
+  // Event listeners for canAutoplay were removed as auto-playback is disabled.
 
   // Synthesize and auto-play the initial greeting on mount
   useEffect(() => {
@@ -434,31 +434,16 @@ const PatientDashboard = () => {
         const data = await resp.json();
         if (data?.audio_data) {
           setMessages(prev => prev.map(m => m.id === '1' ? { ...m, audioData: data.audio_data, hasAudio: true } : m));
-          if (canAutoplay && !initialGreetingPlayedRef.current) {
-            setTimeout(() => {
-              playAudio('1', data.audio_data);
-              initialGreetingPlayedRef.current = true;
-            }, 500);
-          }
+          // Auto-play initial greeting was removed at user request.
         }
       } catch {
         // Silently ignore; text-only fallback
       }
     };
     synthesizeInitialGreeting();
-  }, [canAutoplay, initialGreetingText]);
+  }, [initialGreetingText]);
 
-  // Auto-play the initial greeting once interaction occurs and audio is ready
-  useEffect(() => {
-    if (!canAutoplay || initialGreetingPlayedRef.current) return;
-    const first = messages.find(m => m.id === '1');
-    if (first?.hasAudio && first.audioData) {
-      setTimeout(() => {
-        playAudio('1', first.audioData!);
-        initialGreetingPlayedRef.current = true;
-      }, 500);
-    }
-  }, [canAutoplay, messages]);
+  // Auto-play initial greeting on interaction was removed at user request.
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-medical-light to-background">
@@ -572,6 +557,23 @@ const PatientDashboard = () => {
                     </div>
                   </div>
                 ))}
+                {isLoading && (
+                  <div className="flex gap-3">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center bg-accent text-white">
+                      <Bot className="w-4 h-4" />
+                    </div>
+                    <div className="max-w-[80%]">
+                      <div className="inline-block p-4 rounded-2xl bg-muted text-foreground flex items-center justify-center">
+                        <div className="flex space-x-1.5 h-3">
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
             </ScrollArea>
 

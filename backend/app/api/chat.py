@@ -145,9 +145,9 @@ def _format_provider_clinic_mismatch_prompt(
     parts.append("لقيت دكاترة بنفس الاسم لكن في عيادات مختلفة. اختار رقم:")
     for i, (name, clinic) in enumerate(items, start=1):
         suffix = f" — {clinic}" if clinic else ""
-        parts.append(f"{i} {name}{suffix}")
+        parts.append(f"{i} - {name}{suffix}")
     parts.append("اكتب رقم الاختيار أو اكتب اسم العيادة المطلوبة")
-    return " ".join(parts).strip()
+    return "\n".join(parts).strip()
 
 
 def _apply_pending_action_resolution(
