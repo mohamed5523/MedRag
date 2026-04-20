@@ -34,11 +34,11 @@ services:
       - ./backend/app:/app/app
       - ./backend/run.py:/app/run.py
       - ./backend/uploads:/app/uploads
-      - ./.cursor:/home/morad/Projects/heal-query-hub/.cursor
     ports:
       - "8000:8000"
     networks:
       - medrag
+    restart: unless-stopped
     depends_on:
       phoenix:
         condition: service_started
@@ -49,7 +49,7 @@ services:
       mcp-server:
         condition: service_started
     healthcheck:
-      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1" ] # test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -64,8 +64,6 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8000
       - PYTHONUNBUFFERED=1
-    volumes:
-      - ./.cursor:/home/morad/Projects/heal-query-hub/.cursor
     command: [ "python", "clinic_server.py" ]
     ports:
       - "8020:8000"
@@ -102,7 +100,7 @@ services:
       - "4318:4318" # OTLP HTTP receiver
     networks:
       - medrag
-    # No healthcheck needed - backend uses service_started and handles connection failures gracefully
+    restart: unless-stopped
 
   frontend:
     build:
@@ -122,6 +120,7 @@ services:
         condition: service_healthy
     networks:
       - medrag
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:latest

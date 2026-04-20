@@ -1,8 +1,9 @@
+import json
 import logging
 import os
 import secrets
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from opentelemetry import trace
 
@@ -25,7 +26,7 @@ class SessionManager:
         with tracer.start_as_current_span("session.create") as span:
             span.set_attribute("session.id", session_id[:16] + "...")
             key = f"session:meta:{session_id}"
-            redis_client.set(key, {"created_at": time.time()}, ex=self.session_ttl)
+            redis_client.set(key, json.dumps({"created_at": time.time()}), ex=self.session_ttl)
             logger.info(f"✅ Session created: {session_id[:16]}...")
             return session_id
     
@@ -36,11 +37,26 @@ class SessionManager:
         """
         Return a valid session ID. If provided_id is valid, refresh its TTL and return it,
         otherwise create a new session and return the new ID.
+
+        [STABILITY] Preserve the original created_at timestamp when refreshing so
+        session-age metrics stay accurate. Previously the refresh overwrote the key
+        with only {updated_at: ...}, silently losing created_at on every request.
         """
         if provided_id and self.is_valid(provided_id):
             key = f"session:meta:{provided_id}"
-            # Refresh TTL and mark updated_at; keep original created_at if present
-            redis_client.set(key, {"updated_at": time.time()}, ex=self.session_ttl)
+            # Read existing meta so we can preserve created_at
+            raw = redis_client.get(key)
+            existing: Dict[str, Any] = {}
+            if raw:
+                try:
+                    existing = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    existing = {}  # stale non-JSON value; start fresh
+            meta = {
+                "created_at": existing.get("created_at", time.time()),
+                "updated_at": time.time(),
+            }
+            redis_client.set(key, json.dumps(meta), ex=self.session_ttl)
             logger.debug(f"🔄 Session refreshed: {provided_id[:16]}...")
             return provided_id
         return self.create_session(session_id=provided_id)

@@ -271,7 +271,7 @@ class ShortTermMemoryStore:
         k = self._k_pending_action(session_id)
         ok = False
         try:
-            ok = bool(redis_client.set(k, payload, ex=self.session_ttl_seconds))
+            ok = bool(redis_client.set(k, json.dumps(payload, ensure_ascii=False), ex=self.session_ttl_seconds))
         except Exception as e:
             logger.error(f"Redis error saving pending_action for session {session_id[:16]}...: {e}")
             ok = False

@@ -43,3 +43,8 @@ playground/
 
 # Windows Zone.Identifier metadata
 *:Zone.Identifier
+backend_logs.txt
+*.zip
+test_*.py
+.venv/
+.env.previous

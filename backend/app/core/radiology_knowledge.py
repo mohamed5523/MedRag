@@ -155,7 +155,7 @@ _EMERGENCY_PATTERNS: list[str] = [
 ]
 
 _RADIOLOGY_KEYWORDS_FLAT: list[str] = [
-    "رنين", "مرنانة", "مرنانه", "mri",
+    "رنين", "مرنانة", "مرنانه", "mri", "رنين مغناطيسي",
     "سكانر", "مقطعية", "مقطعي", "مقطعيه", "ct",
     "سونار", "تلفزيوني", "تلفزيونية", "تلفزيونيه", "ultrasound",
     "دوبلر", "doppler",
@@ -165,6 +165,13 @@ _RADIOLOGY_KEYWORDS_FLAT: list[str] = [
     "بانوراما", "باناراما", "سيفالوميتريك",
     "إكس راي", "xray", "x-ray",
     "أشعة عادية", "اشعة", "اشعه", "أشعه", "أشعة",
+    # [STABILITY] added missing variants that were detected in _MODALITY_KEYWORDS
+    # but absent from the flat list, causing is_radiology_question() to return False
+    # for questions containing these terms — leading to wrong RAG routing.
+    "إيكو", "ايكو", "echo",
+    "هولتر", "holter",
+    "pet-scan", "بيتي سكان",
+    "باناراما", "cephalometric",
 ]
 
 

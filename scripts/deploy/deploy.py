@@ -247,7 +247,10 @@ def main():
     write_remote_file(client, f"{REMOTE_DIR}/frontend/.env", frontend_env_content)
 
     print("Starting application with Docker Compose...")
-    # Using stream_output=True to show build progress
+    # The backend/app directory is volume-mounted (not baked into the image).
+    # A simple restart picks up all code changes immediately — no rebuild needed.
+    run_command(client, f"cd {REMOTE_DIR} && /usr/local/bin/docker-compose restart backend", stream_output=True)
+    # Bring up any stopped services and rebuild images for non-volume services
     cmd = f"cd {REMOTE_DIR} && /usr/local/bin/docker-compose up -d --build --remove-orphans"
     success, out = run_command(client, cmd, stream_output=True)
     

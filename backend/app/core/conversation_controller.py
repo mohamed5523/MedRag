@@ -336,30 +336,39 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
       clear doctor context (doctor + provider_id).
     - If user asks a generic question with NO entity mentions at all (e.g., "مين الدكاترة؟"),
       clear stale doctor/provider_id so the query isn't constrained to an old context.
+
+    [STABILITY] provider_id is ALWAYS cleared alongside doctor in every branch.
+    Previously provider_id was forgotten in some branches, causing stale resolved IDs
+    to reach the MCP API even after the doctor name was cleared.
     """
     has_doc = _explicit_doctor_mention(query_text)
     has_clinic = _explicit_clinic_mention(query_text)
+
+    def _clear_doctor(entities: Any) -> None:
+        """Helper: clear doctor name AND its resolved ID together."""
+        if hasattr(entities, "doctor"):
+            entities.doctor = None
+        if hasattr(entities, "provider_id"):
+            entities.provider_id = None
+
+    def _clear_clinic(entities: Any) -> None:
+        """Helper: clear clinic name AND its resolved ID together."""
+        if hasattr(entities, "clinic"):
+            entities.clinic = None
+        if hasattr(entities, "clinic_id"):
+            entities.clinic_id = None
 
     # 1. Complete topic change detection (explicit cancellations)
     query_lower = query_text.casefold()
     cancellations = ["لا ثواني", "لا استنى", "غيرت رأيي", "بلاش", "لا مش", "لأ مش", "لغى", "إلغاء", "الغاء", "سيبك من"]
     if any(cancel in query_lower for cancel in cancellations):
-        if hasattr(entities, "doctor"):
-             entities.doctor = None
-        if hasattr(entities, "provider_id"):
-             entities.provider_id = None
-        if hasattr(entities, "clinic"):
-             entities.clinic = None
-        if hasattr(entities, "clinic_id"):
-             entities.clinic_id = None
+        _clear_doctor(entities)
+        _clear_clinic(entities)
         if hasattr(entities, "specialty"):
-             entities.specialty = None
+            entities.specialty = None
 
     if has_doc and not has_clinic:
-        if hasattr(entities, "clinic"):
-            entities.clinic = None
-        if hasattr(entities, "clinic_id"):
-            entities.clinic_id = None
+        _clear_clinic(entities)
 
     elif has_clinic and not has_doc:
         # If user explicitly mentioned a clinic this turn, overwrite any stale clinic from previous state.
@@ -367,12 +376,11 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
         if extracted and hasattr(entities, "clinic"):
             entities.clinic = extracted
         # New clinic mention should invalidate a previously resolved clinic_id.
-        if hasattr(entities, "clinic_id"):
-            entities.clinic_id = None
-        if hasattr(entities, "doctor"):
-            entities.doctor = None
-        if hasattr(entities, "provider_id"):
-            entities.provider_id = None
+        _clear_clinic(entities)
+        # Also set the newly extracted clinic if we got one
+        if extracted and hasattr(entities, "clinic"):
+            entities.clinic = extracted
+        _clear_doctor(entities)
 
     elif not has_doc and not has_clinic:
         # Generic query with no entity mentions at all.
@@ -383,10 +391,7 @@ def apply_context_switch_rules(query_text: str, entities: Any) -> None:
             "النهارده", "بكره", "المواعيد", "عايز", "عايزه", "محتاج",
         }
         if any(kw in query_lower for kw in _generic_intent_keywords):
-            if hasattr(entities, "doctor"):
-                entities.doctor = None
-            if hasattr(entities, "provider_id"):
-                entities.provider_id = None
+            _clear_doctor(entities)
 
 
 def format_provider_disambiguation_prompt(candidates: list[dict[str, Any]]) -> str:
@@ -544,5 +549,3 @@ def apply_pending_action_resolution(
         state_input_query = str(resolution.get("combined_query") or request_query)
 
     return forced_intent, forced_doctor, forced_clinic, forced_specialty, state_input_query
-
-

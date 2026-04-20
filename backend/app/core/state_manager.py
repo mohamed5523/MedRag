@@ -6,11 +6,19 @@ Improvements:
 - Payment questions (تقسيط/كاش/فيزا) correctly classified as ask_price
 - Better triage: symptoms → clinic specialty → MCP intent
 - Seniority titles never mistaken for doctor names
+- [STABILITY] Doctor name confidence gate: name rejected unless ≥ 2 tokens and not a
+  seniority/specialty/non-name word — prevents ghost doctor entities from vague input.
+- [STABILITY] merge_states: doctor entity cleared (+ provider_id) when new state
+  explicitly has no doctor, avoiding stale doctor leaking into clinic-scope queries.
+- [STABILITY] clinic entity cleared when new state explicitly has no clinic.
+- [STABILITY] extract_state prompt explicitly forbids extracting doctor from a full
+  patient name (e.g. when user types their own name as a greeting or context).
 """
 
 import logging
 import os
-from typing import List, Literal, Optional
+import re
+from typing import List, Literal, Optional, Set
 
 from openai import OpenAI
 from opentelemetry import trace
@@ -18,6 +26,51 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("medrag.state_manager")
+
+# ---------------------------------------------------------------------------
+# Doctor-name guard: words that are NOT personal names even when preceded by دكتور
+# ---------------------------------------------------------------------------
+_NON_NAME_TOKENS: Set[str] = {
+    # Seniority / titles
+    "استشاري", "الاستشاري", "استشارى", "اخصائي", "أخصائي", "اخصائى", "أخصائى",
+    "مقيم", "رئيس", "قسم", "ممارس", "عام", "مدير",
+    # Specialties / clinics (partial list — LLM covers the rest)
+    "أطفال", "اطفال", "نسا", "نساء", "توليد", "عظام", "أسنان", "اسنان",
+    "باطنة", "باطنه", "باطن", "قلب", "جلدية", "جلديه", "رمد", "عيون",
+    "أعصاب", "اعصاب", "جراحة", "جراحه", "أنف", "أذن", "حنجرة", "صدر",
+    "صدريه", "مسالك", "سكر", "غدد", "نفسية", "نفسيه", "علاج", "طبيعي",
+    "أورام", "اورام", "تجميل", "اشعه", "أشعة", "روماتيزم", "مناعه",
+    # Presence / time words (already in prompt but guard anyway)
+    "موجود", "متاح", "جاى", "جايه", "بيجي", "رايح", "ماشي", "بيكشف", "بيفتح",
+    "الضهر", "الصبح", "العصر", "النهارده", "بكرة", "دلوقتي", "الساعه",
+    "السبت", "الأحد", "الاحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة",
+}
+
+_MIN_DOCTOR_NAME_TOKENS = 2  # must have at least first + last name
+
+
+def _is_valid_doctor_name(name: Optional[str]) -> bool:
+    """
+    Return True only if the extracted doctor name looks like a real personal name.
+    Guards against: single-word specialty names, seniority titles, time words.
+    """
+    if not name:
+        return False
+    tokens = [t for t in name.strip().split() if t]
+    if len(tokens) < _MIN_DOCTOR_NAME_TOKENS:
+        # Single-token names are rejected unless they look like a proper Arabic given name.
+        # We allow them only when they are NOT in the non-name blocklist.
+        if len(tokens) == 1 and tokens[0] not in _NON_NAME_TOKENS:
+            # Still accept single token if it starts with uppercase (Latin) — e.g. "Maria"
+            # or looks like a proper Arabic name (starts with common name prefixes).
+            # Be conservative: reject to avoid false positives.
+            return False
+        return False
+    # Reject if ANY token is a known non-name word
+    for tok in tokens:
+        if tok in _NON_NAME_TOKENS:
+            return False
+    return True
 
 
 class Entities(BaseModel):
@@ -87,6 +140,11 @@ _SYSTEM_PROMPT = """\
 - "دكتور أحمد" / "دكتور سامي خليل" → doctor="أحمد"/"سامي خليل"
 - الألقاب التالية ليست أسماء شخصية: استشاري، أخصائي، مقيم، الاستشاري، رئيس قسم
 
+⚠️ قاعدة مهمة جداً: لا تستخرج doctor إلا إذا سبق الاسم كلمة "دكتور" أو "د." أو "Dr" صراحةً في الجملة.
+إذا كتب المستخدم اسمه الشخصي (مثال: "ماجد مجدى عبدالملاك" بدون كلمة دكتور) → doctor=null.
+الاسم الشخصي للمستخدم لا يُعامَل كاسم دكتور أبداً.
+doctor يجب أن يكون اسمًا شخصيًا (اسم + لقب على الأقل) وليس تخصصاً أو لقباً وظيفياً.
+
 ## 5. كلمات ليست أسماء دكاترة (إذا جاءت بعد "دكتور"):
 الحضور/الغياب: موجود، متاح، جاى، جايه، بيجي، رايح، ماشي، بيكشف، بيفتح
 الوقت: الضهر، الصبح، العصر، النهارده، بكرة، دلوقتي، الساعه
@@ -153,6 +211,20 @@ class StateManager:
                 )
                 parsed: ConversationState = response.choices[0].message.parsed
                 parsed.last_user_question = current_query
+
+                # ── [STABILITY] Doctor name confidence gate ───────────────────
+                # Reject extracted doctor names that don't look like real personal
+                # names (single token, seniority title, specialty word, time word).
+                if parsed.entities.doctor and not _is_valid_doctor_name(parsed.entities.doctor):
+                    logger.info(
+                        "Doctor name '%s' rejected by confidence gate — clearing",
+                        parsed.entities.doctor,
+                    )
+                    parsed.entities.doctor = None
+                    parsed.entities.provider_id = None
+                    # If doctor was the sole reason for target_entity_type=doctor, reset
+                    if parsed.target_entity_type == "doctor":
+                        parsed.target_entity_type = "clinic" if parsed.entities.clinic else "unknown"
                 span.set_attribute("state.intent", parsed.intent)
                 span.set_attribute("state.entity_type", parsed.target_entity_type)
                 span.set_attribute("state.clinic", parsed.entities.clinic or "")
@@ -178,15 +250,49 @@ class StateManager:
         )
 
     def merge_states(self, prev: ConversationState, new: ConversationState) -> ConversationState:
+        """
+        Merge previous and new state.
+
+        [STABILITY] Clearing rules:
+        - If the new state extracted NO doctor AND the intent changed (different topic),
+          clear prev doctor + provider_id so stale doctor doesn't leak into clinic queries.
+        - If new state extracted NO clinic AND intent changed, clear prev clinic + clinic_id.
+        - Symptoms always accumulate.
+        - Other fields: new value wins if truthy, else prev is kept.
+        """
         merged = prev.model_copy(deep=True)
         merged.intent = new.intent
         merged.last_user_question = new.last_user_question
         merged.needs_followup = new.needs_followup
-        for field in ["doctor", "clinic", "hospital", "specialty", "location", "appointment_time"]:
+
+        intent_changed = prev.intent != new.intent
+
+        # Doctor: new value wins; but also clear stale doctor when intent changed and
+        # new LLM call found no doctor (meaning user switched to a clinic/general query).
+        if new.entities.doctor:
+            merged.entities.doctor = new.entities.doctor
+            merged.entities.provider_id = new.entities.provider_id  # sync resolved ID
+        elif intent_changed:
+            # User changed topic and there's no doctor in the new state — clear stale.
+            merged.entities.doctor = None
+            merged.entities.provider_id = None
+
+        # Clinic: same clearing logic
+        if new.entities.clinic:
+            merged.entities.clinic = new.entities.clinic
+            merged.entities.clinic_id = new.entities.clinic_id
+        elif intent_changed:
+            merged.entities.clinic = None
+            merged.entities.clinic_id = None
+
+        # Other scalar fields: new wins if truthy
+        for field in ["hospital", "specialty", "location", "appointment_time"]:
             val = getattr(new.entities, field)
             if val:
                 setattr(merged.entities, field, val)
+
         merged.entities.symptoms = list(set(merged.entities.symptoms + new.entities.symptoms))
+
         if new.target_entity_type != "unknown":
             merged.target_entity_type = new.target_entity_type
         return merged

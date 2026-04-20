@@ -256,6 +256,86 @@ _ROUTING_SYSTEM_PROMPT = """\
 6. إذا كان السؤال عن يوم محدد → ضع اليوم في date_hint
 7. في all_intents: ضع كل النوايا المكتشفة بالترتيب من الأهم
 
+ 
+
+━━━ التداخلات والإجراءات الطبية ━━━
+إذا ذكر المريض إجراءً طبياً محدداً (تداخل)، حدد العيادة المناسبة له:
+ 
+إجراءات القلب:
+- رسم قلب / تخطيط قلب / ECG / EKG / كهرباء قلب → عيادة قلب أو باطنة
+- ايكو / echo / سونار القلب → عيادة قلب
+- هولتر / holter / مراقبة القلب → عيادة قلب
+ 
+إجراءات المخ والأعصاب:
+- رسم مخ / تخطيط المخ / EEG / كهرباء مخ → عيادة أعصاب
+- استكمال رسم مخ → عيادة أعصاب
+ 
+إجراءات العيون:
+- كشف كمبيوتر / كشف بالكمبيوتر → عيادة رمد أو أشعة
+- فحص قاع العين / قاع عين → عيادة رمد
+- قياس ضغط العين / ضغط عين → عيادة رمد
+- كشف نظارة / قياس النظر / نضارة → عيادة رمد
+ 
+إجراءات الجراحة:
+- غيار / غيار صغير / تغيير الضمادة / تضميد → عيادة جراحة
+- خياطة جرح → عيادة جراحة
+ 
+إجراءات الأسنان:
+- تركيبات زيركون / سن زيركون / تاج زيركون → عيادة أسنان
+- حشو سن / حشو ضرس / filling → عيادة أسنان
+- خلع ضرس / قلع سن → عيادة أسنان
+- تنظيف أسنان / scaling → عيادة أسنان
+- تقويم أسنان → عيادة أسنان
+ 
+إجراءات العظام:
+- حقنة مفصل / كورتيزون / هيالورونيك → عيادة عظام
+ 
+إجراءات الباطنة:
+- منظار معدة / منظار قولون / endoscopy → عيادة باطنة
+ 
+إجراءات العلاج الطبيعي:
+- جلسة علاج طبيعي / جلسة كهربا / موجات صوتية / فيزيوثيرابي → عيادة علاج طبيعي
+ 
+إجراءات التجميل:
+- بوتوكس / botox → عيادة جراحه تجميل
+- فيلر / filler → عيادة جراحه تجميل
+ 
+قاعدة مهمة للتداخلات:
+- إذا ذكر المريض إجراءً معروفاً → mode=mcp, intent=ask_price, clinic_name=العيادة المناسبة
+- إذا الإجراء غير موجود في البيانات → النظام سيخبر المريض بالعيادة الصحيحة للاستفسار
+- إذا كان الإجراء يمكن تواجده في أكثر من عيادة (مثل رسم القلب) → اختر العيادة الأكثر تخصصاً
+  مثال: رسم قلب → clinic_name="قلب" (وليس باطنة، لأن القلب أكثر تخصصاً)
+
+ ━━━ التداخلات والإجراءات الطبية ━━━
+ 
+إذا وجدت في الـ Context معلومات عن تداخل طبي محدد (رسم قلب، كشف كمبيوتر، غيار، إلخ):
+ 
+حالة 1 — الإجراء موجود في البيانات:
+- اعرض السعر مباشرة بشكل واضح
+- اذكر اسم الدكتور والعيادة إذا كانا متاحَين
+- مثال جيد: "رسم القلب عند دكتورة Maria Sami في عيادة الباطنة بـ 80 جنيه"
+- إذا كان في أكثر من عيادة → اعرضهم كلهم مع أسعارهم
+ 
+حالة 2 — الإجراء غير موجود في البيانات (ستجد رسالة "تداخل غير موجود في البيانات"):
+- لا تقل "مش عارف" أو "مش متوفر" فقط
+- أخبر المريض بالعيادة الصحيحة التي يجب أن يتوجه إليها
+- مثال جيد: "الايكو على القلب مش مسجل في أسعار النظام دلوقتي، بس تقدر تتصل بعيادة القلب 
+  مباشرة أو تمشي لاستقبال المستشفى عشان تعرف السعر وتحجز"
+- لا تذكر أسعار من عندك — فقط وجّه المريض للعيادة المناسبة
+ 
+حالة 3 — إذا سأل المريض عن إجراء وظهر في السياق قائمة أسعار كاملة للعيادة:
+- ركز على الإجراء المطلوب تحديداً فقط
+- لا تعدد كل الأسعار ما لم يطلب المريض ذلك
+- مثال: إذا سأل "بكام رسم القلب" وظهر 6 خدمات في السياق،
+  اعرض فقط سعر "رسم القلب" وليس كل الخدمات
+ 
+أسلوب الرد للتداخلات:
+- كن محدداً وواضحاً
+- استخدم نبرة دافئة ومفيدة
+- إذا الإجراء موجود عند دكتور واحد فقط → قل ذلك صراحة
+- إذا الإجراء غير متوفر → وجّه للعيادة المناسبة + اقترح الاتصال بالاستقبال
+
+
 ━━━ أمثلة مهمة ━━━
 "دكتور النسا بيكشف بكام ومين موجود بكرة الضهر؟"
 → mode=mcp, primary_intent=ask_price_and_availability, clinic_name="نسا وتوليد", date_hint="tomorrow"
@@ -499,15 +579,37 @@ def _patch_state_from_llm(state: ConversationState, decision: LLMRoutingDecision
     """
     Apply LLM-extracted entities back to state so clinic_workflow can use them
     without needing to re-extract from text.
+
+    [STABILITY] Clearing rules mirror _apply_enrichment in clinic_workflow:
+    - Router found a clinic but NO doctor → clear stale doctor + provider_id from state.
+    - Router found a doctor → overwrite (don't skip if state already had one).
+    - Router found a clinic → overwrite (don't skip if state already had one).
+    This prevents previous-turn doctor/clinic entities from silently bleeding into
+    new queries when the user switches topic.
     """
     try:
-        if decision.clinic_name and not state.entities.clinic:
+        if decision.clinic_name:
+            if decision.clinic_name != state.entities.clinic:
+                # Clinic changed → old resolved ID is stale
+                state.entities.clinic_id = None
             state.entities.clinic = decision.clinic_name
             state.target_entity_type = "clinic"
 
-        if decision.doctor_name and not state.entities.doctor:
+        if decision.doctor_name:
+            if decision.doctor_name != state.entities.doctor:
+                # Doctor changed → old resolved ID is stale
+                state.entities.provider_id = None
             state.entities.doctor = decision.doctor_name
             state.target_entity_type = "doctor"
+        elif decision.clinic_name and not decision.doctor_name:
+            # Clinic-only query: clear any stale doctor so we don't scope to wrong provider
+            if state.entities.doctor:
+                logger.info(
+                    "Router patch: clinic-only intent '%s' → clearing stale doctor '%s' + provider_id",
+                    decision.primary_intent, state.entities.doctor,
+                )
+                state.entities.doctor = None
+                state.entities.provider_id = None
 
         if decision.primary_intent in MCP_INTENTS and state.intent not in MCP_INTENTS:
             state.intent = decision.primary_intent

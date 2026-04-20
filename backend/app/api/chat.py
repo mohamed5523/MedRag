@@ -199,10 +199,10 @@ async def _maybe_generate_audio(text: str) -> tuple[Optional[str], Optional[int]
 @router.post("/query", response_model=ChatResponse)
 async def query_documents(request: ChatRequest, x_session_id: Optional[str] = Header(None)):
     """
-    Process a user query and return an AI-generated answer based on the document collection.
-    All operations are traced with detailed spans visible in Phoenix.
+    Process a user query and return an AI-generated answer.
+    Mirrors /query-with-voice (without TTS) so both endpoints share identical
+    routing, pending_action, and MCP logic.
     """
-    # Create root span for the entire request
     with tracer.start_as_current_span("chat.query") as root_span:
         root_span.set_attribute("http.method", "POST")
         root_span.set_attribute("http.route", "/api/chat/query")
@@ -210,161 +210,294 @@ async def query_documents(request: ChatRequest, x_session_id: Optional[str] = He
         root_span.set_attribute("query.length", len(request.query))
         root_span.set_attribute("max_results", request.max_results or 5)
         root_span.add_event("request.received", {"timestamp": datetime.now().isoformat()})
-        
+
         try:
+            # [STABILITY] Validate before ANY processing — avoids wasting LLM calls on empty input
+            if not request.query.strip():
+                raise HTTPException(status_code=400, detail="Query cannot be empty")
+
             start_time = time.time()
             session_id = session_manager.get_or_create(x_session_id)
-            # Add user message to Redis
-            short_term_memory.add_message(session_id, "user", request.query)
+            root_span.set_attribute("session.id", session_id[:16] + "...")
 
-            # Retrieve conversation history
+            short_term_memory.add_message(session_id, "user", request.query)
             history = short_term_memory.get_messages(session_id, limit=5)
             history_ctx = short_term_memory.get_formatted_context(session_id, last_n=5)
             root_span.set_attribute("conversation.length", len(history))
             root_span.set_attribute("conversation.has_context", bool(history_ctx))
-            # Log a concise view of the history and the context string used for rewriting
-            try:
-                history_preview = [
-                    {
-                        "role": msg.role,
-                        "content": (msg.content[:200] + "...") if len(msg.content) > 200 else msg.content,
-                        "ts": msg.timestamp,
-                    }
-                    for msg in history
-                ]
-                logger.info(
-                    "Session %s history (%d msgs): %s",
-                    session_id[:16] + "...",
-                    len(history_preview),
-                    history_preview,
-                )
-                if history_ctx:
-                    logger.info(
-                        "Session %s history_ctx used for rewrite (len=%d): %s",
-                        session_id[:16] + "...",
-                        len(history_ctx),
-                        history_ctx[:1000] + ("..." if len(history_ctx) > 1000 else ""),
-                    )
-            except Exception as _log_err:
-                logger.debug("Unable to log history preview: %s", _log_err)
-            
-            # Extract and update conversation state
-            previous_state = short_term_memory.get_state(session_id)
-            
-            # Prepare history for state extraction (reverse order to be chronological if needed, but the extractor expects list of dicts)
-            # ShortTermMemoryStore.get_messages returns chronological order (oldest first)?
-            # Let's check: get_messages says "Get messages oldest-first"
-            # So 'history' is oldest -> newest. That's good.
-            history_dicts = [{"role": m.role, "content": m.content} for m in history]
-            
-            with tracer.start_as_current_span("extract_state") as span:
-                new_state = state_manager.extract_state(request.query, history_dicts, previous_state)
 
-                short_term_memory.save_state(session_id, new_state)
-                
-                rewritten_query_from_state = state_manager.rewrite_query(new_state)
-                
+            history_dicts = [{"role": m.role, "content": m.content} for m in history]
+            history_payload = [{"role": m.role, "content": m.content} for m in history if m.content]
+
+            # ------------------------------------------------------------------
+            # Conversation Controller: pending_action (disambiguation / triage)
+            # ------------------------------------------------------------------
+            pending_action = None
+            forced_intent: Optional[str] = None
+            forced_doctor: Optional[str] = None
+            forced_clinic: Optional[str] = None
+            forced_clinic_id: Optional[int] = None
+            forced_provider_id: Optional[int] = None
+            reset_doctor: bool = False
+            forced_specialty: Optional[str] = None
+            state_input_query = request.query
+
+            if ENABLE_PENDING_ACTION:
+                pending_action = short_term_memory.get_pending_action(session_id)
+                if pending_action:
+                    root_span.set_attribute("pending_action.type", pending_action.get("type", ""))
+                    root_span.set_attribute("pending_action.intent", pending_action.get("intent", ""))
+                    pending_action_type = (str(pending_action.get("type") or "").strip() or None)
+
+                    resolution = resolve_pending_action(request.query, pending_action)
+                    if resolution:
+                        selected = resolution.get("selected") if isinstance(resolution, dict) else None
+                        if isinstance(selected, dict):
+                            if pending_action_type == "clinic_disambiguation":
+                                try:
+                                    forced_clinic_id = int(selected.get("clinic_id")) if selected.get("clinic_id") is not None else None
+                                except Exception:
+                                    forced_clinic_id = None
+                                forced_clinic = (selected.get("clinic_name") or forced_clinic or "").strip() or None
+                                reset_doctor = True
+                            elif pending_action_type in {"provider_disambiguation", "provider_clinic_mismatch"}:
+                                try:
+                                    forced_provider_id = int(selected.get("provider_id")) if selected.get("provider_id") is not None else None
+                                except Exception:
+                                    forced_provider_id = None
+                                try:
+                                    forced_clinic_id = int(selected.get("clinic_id")) if selected.get("clinic_id") is not None else None
+                                except Exception:
+                                    pass
+
+                        short_term_memory.clear_pending_action(session_id)
+                        root_span.set_attribute("pending_action.resolved", True)
+                        (
+                            forced_intent,
+                            forced_doctor,
+                            forced_clinic,
+                            forced_specialty,
+                            state_input_query,
+                        ) = _apply_pending_action_resolution(
+                            pending_action_type, resolution, request.query
+                        )
+                        pending_action = None
+                    else:
+                        if should_abandon_pending_action(request.query, pending_action):
+                            short_term_memory.clear_pending_action(session_id)
+                            root_span.set_attribute("pending_action.abandoned", True)
+                            pending_action = None
+                        else:
+                            turns_remaining = int(pending_action.get("turns_remaining") or 2) - 1
+                            pending_action["turns_remaining"] = turns_remaining
+                            if turns_remaining <= 0:
+                                short_term_memory.clear_pending_action(session_id)
+                                prompt = "ممكن تكتب الاسم كامل عشان أقدر أحدد الدكتور أو العيادة صح؟"
+                            else:
+                                short_term_memory.save_pending_action(session_id, pending_action)
+                                if pending_action.get("type") == "provider_disambiguation":
+                                    prompt = _format_provider_disambiguation_prompt(list(pending_action.get("candidates") or []))
+                                elif pending_action.get("type") == "provider_clinic_mismatch":
+                                    prompt = _format_provider_clinic_mismatch_prompt(
+                                        list(pending_action.get("candidates") or []),
+                                        requested_clinic=str(pending_action.get("requested_clinic") or "").strip() or None,
+                                    )
+                                elif pending_action.get("type") == "clinic_disambiguation":
+                                    prompt = _format_clinic_disambiguation_prompt(list(pending_action.get("candidates") or []))
+                                else:
+                                    prompt = "قولي الألم فين بالظبط وهل فيه سخونية أو قيء؟"
+
+                            short_term_memory.add_message(session_id, "assistant", prompt)
+                            return ChatResponse(
+                                answer=prompt,
+                                sources=[],
+                                context_count=0,
+                                model_used=qa_engine.model,
+                                tokens_used=0,
+                                error="pending_action",
+                            )
+
+            # Check QA engine early — avoids wasting state extraction on unavailable service
+            if not qa_engine.is_available():
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI service unavailable. Please ensure OPENAI_API_KEY is configured.",
+                )
+
+            # Extract conversation state
+            previous_state = short_term_memory.get_state(session_id)
+            with tracer.start_as_current_span("extract_state") as span:
+                new_state = state_manager.extract_state(state_input_query, history_dicts, previous_state)
                 span.set_attribute("state.intent", new_state.intent)
                 span.set_attribute("state.entities.doctor", str(new_state.entities.doctor))
-                span.set_attribute("query.rewritten_state", rewritten_query_from_state)
-                
-                logger.info(f"🧠 State Update: Intent={new_state.intent}, Entities={new_state.entities}")
+                logger.info("🧠 State Update: Intent=%s, Entities=%s", new_state.intent, new_state.entities)
 
-            # Rewrite query to include explicit date hint for retrieval
-            # We use the state-rewritten query as the base for the retrieval query
-            query_with_context = rewritten_query_from_state
-            retrieval_query = rewritten_query_from_state
+            # Apply forced entities from pending_action resolution
+            if forced_intent:
+                new_state.intent = forced_intent
+            if forced_doctor:
+                new_state.entities.doctor = forced_doctor
+                new_state.target_entity_type = "doctor"
+            if forced_clinic:
+                new_state.entities.clinic = forced_clinic
+                if new_state.target_entity_type == "unknown":
+                    new_state.target_entity_type = "clinic"
+            if forced_clinic_id is not None:
+                new_state.entities.clinic_id = forced_clinic_id
+            if forced_provider_id is not None:
+                new_state.entities.provider_id = forced_provider_id
+            if reset_doctor:
+                new_state.entities.doctor = None
+                new_state.entities.provider_id = None
+                if new_state.target_entity_type == "doctor":
+                    new_state.target_entity_type = "clinic"
+            if forced_specialty:
+                new_state.entities.specialty = forced_specialty
+
+            apply_context_switch_rules(request.query, new_state.entities)
+
+            # Symptom triage
+            if ENABLE_SYMPTOM_TRIAGE and not pending_action and is_symptom_triage_request(request.query):
+                specialty = infer_specialty_from_symptoms(request.query)
+                if not specialty:
+                    triage_pending = {
+                        "type": "symptom_triage",
+                        "intent": "list_doctors",
+                        "turns_remaining": 2,
+                        "original_question": request.query,
+                    }
+                    short_term_memory.save_pending_action(session_id, triage_pending)
+                    prompt = "تمام قولي الألم فين بالظبط وهل فيه سخونية أو قيء؟"
+                    short_term_memory.add_message(session_id, "assistant", prompt)
+                    return ChatResponse(
+                        answer=prompt,
+                        sources=[],
+                        context_count=0,
+                        model_used=qa_engine.model,
+                        tokens_used=0,
+                        error="symptom_triage_clarify",
+                    )
+                new_state.intent = "list_doctors"
+                new_state.entities.specialty = specialty
+                new_state.entities.doctor = None
+                new_state.target_entity_type = "clinic"
+
+            # [STABILITY] Save state AFTER all overrides are applied
+            rewritten_query_from_state = state_manager.rewrite_query(new_state)
+            short_term_memory.save_state(session_id, new_state)
+
+            decision = route_conversation(new_state, request.query)
+            root_span.set_attribute("routing.intent", decision.intent)
+            root_span.set_attribute("routing.mode", decision.mode.value)
+
             time_context = qa_engine.build_time_context(request.query)
-            
             with tracer.start_as_current_span("rewrite_query") as span:
-                # If we have context, prepend it in a compact form for retrieval and generation
-                # Note: With state management, we might rely less on raw history concatenation,
-                # but keeping it for date context or other subtleties is fine.
-                # However, mixing the "state rewritten" query with raw history might be confusing.
-                # Let's just use the state rewritten query + date hint for retrieval.
-                
                 rewritten_query, time_context = qa_engine.rewrite_query_with_date_hint(
-                    query_with_context, time_context=time_context
+                    rewritten_query_from_state, time_context=time_context
                 )
                 span.set_attribute("query.rewritten", rewritten_query[:200])
                 span.set_attribute("date_hint", time_context["date_hint"])
-                span.set_attribute("timezone", time_context["tz_name"])
-                span.set_attribute("query.retrieval.length", len(retrieval_query))
-            # Log the final rewritten query that will influence retrieval and LLM prompting
-            try:
-                logger.info(
-                    "Session %s rewritten_query (len=%d): %s",
-                    session_id[:16] + "...",
-                    len(rewritten_query),
-                    rewritten_query[:1000] + ("..." if len(rewritten_query) > 1000 else ""),
-                )
-            except Exception as _log_err:
-                logger.debug("Unable to log rewritten query: %s", _log_err)
 
-            # Validate query
-            with tracer.start_as_current_span("validate_input") as span:
-                if not request.query.strip():
-                    span.record_exception(ValueError("Empty query"))
-                    raise HTTPException(status_code=400, detail="Query cannot be empty")
-                span.add_event("validation.passed")
-            
-            # Check if QA engine is available
-            with tracer.start_as_current_span("check_availability") as span:
-                is_available = qa_engine.is_available()
-                span.set_attribute("qa_engine.available", is_available)
-                span.set_attribute("qa_engine.model", qa_engine.model)
-                if not is_available:
-                    span.record_exception(Exception("QA engine unavailable"))
-                    raise HTTPException(
-                        status_code=503, 
-                        detail="AI service unavailable. Please ensure OPENAI_API_KEY is configured."
+            if decision.mode == RouteMode.MCP:
+                try:
+                    workflow_result = await clinic_workflow.run(
+                        decision=decision,
+                        state=new_state,
+                        question=state_input_query,
+                        qa_engine=qa_engine,
+                        chat_history=history_payload,
+                        user_gender=request.user_gender or "male",
                     )
-                span.add_event("availability.check.passed")
-            
-            # Retrieve relevant documents
+                except (MCPWorkflowError, MCPClientError) as workflow_error:
+                    fallback_reason = getattr(workflow_error, "reason", "mcp_client_error")
+
+                    if (
+                        ENABLE_PENDING_ACTION
+                        and isinstance(workflow_error, MCPWorkflowError)
+                        and fallback_reason in {
+                            "provider_ambiguous", "provider_low_confidence",
+                            "provider_clinic_mismatch", "clinic_ambiguous",
+                        }
+                        and getattr(workflow_error, "data", None)
+                        and (workflow_error.data.get("candidates") or [])
+                    ):
+                        candidates = list(workflow_error.data.get("candidates") or [])
+                        pending_type = (
+                            "clinic_disambiguation" if fallback_reason == "clinic_ambiguous"
+                            else ("provider_clinic_mismatch" if fallback_reason == "provider_clinic_mismatch"
+                                  else "provider_disambiguation")
+                        )
+                        pending = {
+                            "type": pending_type,
+                            "intent": decision.intent,
+                            "turns_remaining": 2,
+                            "original_question": state_input_query,
+                            "candidates": candidates,
+                        }
+                        if pending_type == "provider_clinic_mismatch":
+                            pending["requested_clinic"] = str(
+                                (workflow_error.data or {}).get("requested_clinic") or ""
+                            ).strip()
+                        short_term_memory.save_pending_action(session_id, pending)
+                        if pending_type == "clinic_disambiguation":
+                            prompt = _format_clinic_disambiguation_prompt(candidates)
+                        elif pending_type == "provider_clinic_mismatch":
+                            prompt = _format_provider_clinic_mismatch_prompt(
+                                candidates, requested_clinic=pending.get("requested_clinic") or None
+                            )
+                        else:
+                            prompt = _format_provider_disambiguation_prompt(candidates)
+                        short_term_memory.add_message(session_id, "assistant", prompt)
+                        return ChatResponse(
+                            answer=prompt, sources=[], context_count=0,
+                            model_used=qa_engine.model, tokens_used=0,
+                            error=fallback_reason,
+                        )
+
+                    root_span.set_attribute("routing.mode", "mcp.error")
+                    logger.info("MCP workflow failed: %s", workflow_error)
+                    error_message = str(workflow_error) or "معذرةً، حصل خطأ وأنا بحاول أجيب البيانات من نظام العيادات."
+                    short_term_memory.add_message(session_id, "assistant", error_message)
+                    processing_time = time.time() - start_time
+                    root_span.set_attribute("total.duration_ms", processing_time * 1000)
+                    return ChatResponse(
+                        answer=error_message, sources=[], context_count=0,
+                        model_used=qa_engine.model, tokens_used=None,
+                        error=fallback_reason,
+                    )
+                else:
+                    root_span.set_attribute("routing.mode", "mcp_only")
+                    result_payload = workflow_result.qa_response
+                    short_term_memory.add_message(session_id, "assistant", result_payload.get("answer", ""))
+                    processing_time = time.time() - start_time
+                    root_span.set_attribute("total.duration_ms", processing_time * 1000)
+                    root_span.set_attribute("response.answer_length", len(result_payload.get("answer", "")))
+                    root_span.add_event("request.completed", {"duration_ms": processing_time * 1000, "timestamp": datetime.now().isoformat()})
+                    try:
+                        provider = trace.get_tracer_provider()
+                        if hasattr(provider, "force_flush"):
+                            provider.force_flush(timeout_millis=1000)
+                    except Exception as flush_error:
+                        logger.debug(f"Could not force flush spans: {flush_error}")
+                    return ChatResponse(**result_payload)
+
+            # RAG path
+            alpha_override = ARABIC_HYBRID_ALPHA if time_context.get("is_arabic") else None
             retrieve_start = time.time()
             with tracer.start_as_current_span("retrieve_documents") as span:
-                span.set_attribute("query.length", len(request.query))
-                span.set_attribute("top_k", request.max_results or 5)
-                span.add_event("retrieval.started", {"timestamp": datetime.now().isoformat()})
-                
-                alpha_override = ARABIC_HYBRID_ALPHA if time_context.get("is_arabic") else None
                 relevant_docs = _get_vector_store().retrieve(
-                    query=retrieval_query,
+                    query=rewritten_query_from_state,
                     top_k=request.max_results or 5,
-                    alpha_override=alpha_override
+                    alpha_override=alpha_override,
                 )
-                
-                retrieve_time = time.time() - retrieve_start
                 span.set_attribute("results.count", len(relevant_docs))
-                span.set_attribute("retrieval.duration_ms", retrieve_time * 1000)
-                span.add_event("retrieval.completed", {
-                    "duration_ms": retrieve_time * 1000,
-                    "documents_found": len(relevant_docs)
-                })
-                
-                if relevant_docs:
-                    # Add source information
-                    sources = [doc.metadata.get("source", "Unknown") for doc in relevant_docs]
-                    span.set_attribute("sources.count", len(set(sources)))
-            
+                span.set_attribute("retrieval.duration_ms", (time.time() - retrieve_start) * 1000)
+
             if not relevant_docs:
                 root_span.set_attribute("response.no_documents", True)
-            
-            # Generate answer using QA engine with time context and prior chat history
+
             answer_start = time.time()
             with tracer.start_as_current_span("generate_answer") as span:
-                span.set_attribute("context.count", len(relevant_docs))
-                span.set_attribute("model", qa_engine.model)
-                span.set_attribute("timezone", time_context["tz_name"])
-                # Prepare prior turns for LLM (oldest-first)
-                history_payload = [
-                    {"role": m.role, "content": m.content}
-                    for m in history
-                    if m.content
-                ]
-                span.add_event("answer.generation.started", {"timestamp": datetime.now().isoformat()})
-                
                 result = await qa_engine.answer_question(
                     question=rewritten_query,
                     contexts=relevant_docs,
@@ -372,44 +505,26 @@ async def query_documents(request: ChatRequest, x_session_id: Optional[str] = He
                     chat_history=history_payload,
                     user_gender=request.user_gender or "male",
                 )
-
-                answer_time = time.time() - answer_start
                 span.set_attribute("answer.length", len(result.get("answer", "")))
                 span.set_attribute("tokens_used", result.get("tokens_used", 0))
-                span.set_attribute("sources.count", len(result.get("sources", [])))
-                span.set_attribute("generation.duration_ms", answer_time * 1000)
-                span.add_event("answer.generation.completed", {
-                    "duration_ms": answer_time * 1000,
-                    "tokens_used": result.get("tokens_used", 0)
-                })
-            
-            # Save assistant reply for multi-turn continuity
+                span.set_attribute("generation.duration_ms", (time.time() - answer_start) * 1000)
+
             short_term_memory.add_message(session_id, "assistant", result.get("answer", ""))
-            
             processing_time = time.time() - start_time
             root_span.set_attribute("total.duration_ms", processing_time * 1000)
             root_span.set_attribute("response.answer_length", len(result.get("answer", "")))
-            root_span.add_event("request.completed", {
-                "duration_ms": processing_time * 1000,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-            # Force flush spans to Phoenix immediately (BatchSpanProcessor buffers by default)
-            # This ensures traces appear in Phoenix UI without waiting for batch timeout
+            root_span.add_event("request.completed", {"duration_ms": processing_time * 1000, "timestamp": datetime.now().isoformat()})
+
             try:
-                current_span = trace.get_current_span()
-                if current_span:
-                    # Get the tracer provider and force flush
-                    provider = trace.get_tracer_provider()
-                    if hasattr(provider, 'force_flush'):
-                        provider.force_flush(timeout_millis=1000)  # Wait up to 1 second
+                provider = trace.get_tracer_provider()
+                if hasattr(provider, "force_flush"):
+                    provider.force_flush(timeout_millis=1000)
             except Exception as flush_error:
                 logger.debug(f"Could not force flush spans: {flush_error}")
-            
+
             logger.info(f"Processed query in {processing_time:.2f}s: {request.query[:50]}...")
-            
             return ChatResponse(**result)
-            
+
         except HTTPException:
             root_span.record_exception(Exception("HTTP Exception"))
             raise
@@ -590,8 +705,9 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
             with tracer.start_as_current_span("extract_state") as span:
                 new_state = state_manager.extract_state(state_input_query, history_dicts, previous_state)
 
-                short_term_memory.save_state(session_id, new_state)
-                
+                # [STABILITY] Do NOT save state here yet — forced overrides and
+                # apply_context_switch_rules haven't run. Saving here would persist
+                # a stale/incomplete state to Redis that the next turn would inherit.
                 rewritten_query_from_state = state_manager.rewrite_query(new_state)
                 
                 span.set_attribute("state.intent", new_state.intent)
@@ -654,11 +770,15 @@ async def query_with_voice_response(request: ChatRequest, x_session_id: Optional
                 new_state.intent = "list_doctors"
                 new_state.entities.specialty = specialty
                 new_state.entities.doctor = None  # avoid doctor-specific workflows
+                new_state.entities.provider_id = None
                 new_state.target_entity_type = "clinic"
 
                 # Update rewrite baseline so retrieval/generation sees consistent query
                 rewritten_query_from_state = state_manager.rewrite_query(new_state)
-                short_term_memory.save_state(session_id, new_state)
+
+            # [STABILITY] Save state exactly once, after ALL overrides are applied:
+            # forced entities, context switch rules, and symptom triage modifications.
+            short_term_memory.save_state(session_id, new_state)
 
             decision = route_conversation(new_state, request.query)
             root_span.set_attribute("routing.intent", decision.intent)
