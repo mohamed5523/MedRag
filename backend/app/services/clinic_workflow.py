@@ -251,11 +251,11 @@ def _build_procedure_not_found_context(procedure_name: str, clinics: List[str]) 
     """
     clinic_str = " أو ".join(clinics) if clinics else "العيادة المختصة"
     return (
-        f"[معلومات النظام — تداخل غير موجود في البيانات]\n"
+        f"[معلومات المستشفى — تداخل غير موجود في البيانات]\n"
         f"الإجراء المطلوب: {procedure_name}\n"
-        f"هذا الإجراء غير مسجل حالياً في أسعار النظام.\n"
+        f"هذا الإجراء غير مسجل حالياً في أسعار المستشفى.\n"
         f"العيادة المناسبة: {clinic_str}\n"
-        f"[تعليمات للمساعد: أخبر المريض بأن هذا الإجراء غير متوفر سعره في النظام الآن، "
+        f"[تعليمات للمساعد: أخبر المريض بأن هذا الإجراء غير متوفر سعره في المستشفى الآن، "
         f"وانصحه بالتوجه لـ {clinic_str} أو الاتصال بالاستقبال للاستفسار عن السعر والمواعيد.]"
     )
 
@@ -433,8 +433,8 @@ def _infer_date_range(
             d = _fmt(target); return d, d, True, False
 
     date_from = _fmt(base)
-    date_to = _fmt(base + timedelta(days=6))
-    return date_from, date_to, False, False
+    date_to = _fmt(base)
+    return date_from, date_to, False, True
 
 
 def _infer_target_day_id(
@@ -515,7 +515,7 @@ def _format_price_context(
     doctor = (provider_entry.provider_name_ar or provider_entry.provider_name_en or "") if provider_entry else ""
     lines = []
     if procedure_name:
-        lines.append(f"نتيجة البحث عن '{procedure_name}' في {clinic or 'النظام'}:")
+        lines.append(f"نتيجة البحث عن '{procedure_name}' في {clinic or 'المستشفى'}:")
     elif clinic:
         lines.append(f"أسعار {clinic}:")
     elif doctor:
@@ -534,7 +534,7 @@ def _format_price_context(
         if doc_specific:
             valid = doc_specific
     if not valid:
-        lines.append("- السعر غير متوفر حالياً في النظام.")
+        lines.append("- السعر غير متوفر حالياً في المستشفى.")
     else:
         # Prevent token overflow for large clinics (e.g. dental)
         # Separate kashf and istishara to ensure correct ordering (Kashf first)
@@ -690,9 +690,9 @@ def _format_combined_price_schedule(
                 if len(valid) > len(capped):
                     lines.append(f"  - (...وخدمات أخرى اسأل عنها الاستقبال)")
             else:
-                lines.append("  - السعر: غير متوفر في النظام")
+                lines.append("  - السعر: غير متوفر في المستشفى")
         else:
-            lines.append("  - السعر: غير متوفر في النظام")
+            lines.append("  - السعر: غير متوفر في المستشفى")
         lines.append("")
     return "\n".join(lines)
 
@@ -848,11 +848,11 @@ class ClinicWorkflowService:
                         return result_docs
 
                 try:
-                    docs = await asyncio.wait_for(_dispatch(), timeout=20.0)
+                    docs = await asyncio.wait_for(_dispatch(), timeout=60.0)
                 except asyncio.TimeoutError:
-                    logger.error("MCP workflow timed out after 20s: %s", question[:100])
+                    logger.error("MCP workflow timed out after 60s: %s", question[:100])
                     raise MCPWorkflowError(
-                        "النظام بطيء دلوقتي. ممكن تحاول تاني بعد شوية أو تتصل بالاستقبال مباشرةً؟",
+                        "معلش يا فندم، النظام بطيء شوية دلوقتي. ممكن حضرتك تحاول تاني بعد ثواني، أو لو مستعجل تتواصل مع الاستقبال وهما هيساعدوك فوراً.",
                         reason="timeout",
                     )
 
@@ -863,7 +863,7 @@ class ClinicWorkflowService:
             except Exception as exc:
                 logger.error("Unexpected workflow error: %s", exc, exc_info=True)
                 raise MCPWorkflowError(
-                    "حصل خطأ غير متوقع أثناء جلب بيانات العيادة. ممكن تحاول تاني؟",
+                    "بعتذر لحضرتك جداً، حصل خطأ بسيط وإحنا بنجيب البيانات. ممكن حضرتك تحاول تسألني تاني أو تتواصل مع الاستقبال وهما هيفيدوك؟",
                     reason="unexpected_error",
                 )
 
@@ -1091,7 +1091,7 @@ class ClinicWorkflowService:
         # ── If BOTH legs failed, raise a single clear error ──────────────────
         if not docs:
             raise MCPWorkflowError(
-                "مش قادر أجيب الأسعار أو المواعيد دلوقتي. ممكن تحاول تاني بعد شوية أو تتصل بالاستقبال؟",
+                "عفواً يا فندم، المستشفى مفيهاش معلومات حالياً عن الأسعار أو المواعيد دي. ياريت تتواصل مع الاستقبال وهما هيساعدوك بكل التفاصيل.",
                 reason="both_legs_failed",
             )
 
@@ -1122,7 +1122,7 @@ class ClinicWorkflowService:
                 if is_radiology_question(question):
                     return [Document(page_content=get_radiology_context(question),
                         metadata={"source": "radiology.knowledge"})], audit
-                raise MCPWorkflowError("مفيش أسعار متاحة في النظام لهذه الخدمة حالياً. اتصل بالاستقبال.",
+                raise MCPWorkflowError("معلش يا فندم، المستشفى لسه مسجلتش تفاصيل الأسعار للخدمة دي عندنا. برجاء التواصل مع الاستقبال وهما هيبلغوك بكل التفاصيل.",
                     reason="empty_price_response")
             if not provider_id:
                 now_dt = _cairo_now()
@@ -1151,7 +1151,7 @@ class ClinicWorkflowService:
             if is_radiology_question(question):
                 return [Document(page_content=get_radiology_context(question),
                     metadata={"source": "radiology.knowledge"})], audit
-            raise MCPWorkflowError("مش قادر أحدد العيادة. ممكن تذكر اسم العيادة أو نوع الخدمة؟",
+            raise MCPWorkflowError("بعتذر لحضرتك، بس مش قادر أتعرف على العيادة المطلوبة. ممكن حضرتك توضحلي اسم العيادة أو نوع الخدمة اللي بتدور عليها؟",
                 reason="missing_clinic")
 
         async def _fetch(cid: int, cname: str):
@@ -1180,7 +1180,7 @@ class ClinicWorkflowService:
                 return [Document(
                     page_content=get_radiology_context(question) + "\n\nالسعر: غير متوفر. اتصل بالاستقبال.",
                     metadata={"source": "radiology.knowledge"})], audit
-            raise MCPWorkflowError("مفيش أسعار متاحة في النظام لهذه الخدمة.", reason="empty_price_response")
+            raise MCPWorkflowError("عفواً يا فندم، المستشفى لسه مسجلتش سعر الخدمة دي عندنا. تقدر تتواصل مع الاستقبال عشان يفيدوك بالسعر المظبوط.", reason="empty_price_response")
         return all_docs, audit
 
     async def _handle_schedule(
@@ -1192,6 +1192,14 @@ class ClinicWorkflowService:
         date_hint: Optional[str] = None,
         now_dt: Optional[datetime] = None,
     ) -> Tuple[List[Document], List[ToolAuditEntry]]:
+        period_kws = ["صبح", "صباح", "ليل", "مساء", "اي وقت", "أي وقت", "كل اليوم", "مش فارق", "بالليل", "يوم", "كلها", "طول"]
+        q_lower = (question or "").casefold()
+        if not any(kw in q_lower for kw in period_kws):
+            raise MCPWorkflowError(
+                "عشان أقدر أساعدك أحسن، تحب الموعد يكون فترة الصبح ولا بالليل؟ (أو ممكن تقول 'أي وقت')",
+                reason="missing_period"
+            )
+
         clinic_id, provider_id, provider_entry = await self._resolve_entities(state, audit, question)
         if not clinic_id:
             if is_emergency_radiology(question):
@@ -1200,7 +1208,7 @@ class ClinicWorkflowService:
             if is_radiology_question(question):
                 return [Document(page_content=get_radiology_context(question),
                     metadata={"source": "radiology.knowledge"})], audit
-            raise MCPWorkflowError("محتاج أعرف اسم العيادة عشان أجيب المواعيد.", reason="missing_clinic")
+            raise MCPWorkflowError("تحت أمرك، بس محتاج أعرف اسم العيادة الأول عشان أقدر أجيبلك المواعيد المظبوطة.", reason="missing_clinic")
 
         base_dt = now_dt or _cairo_now()
         date_from, date_to, _, _ = _infer_date_range(question, now_dt=base_dt, date_hint=date_hint)
@@ -1244,7 +1252,7 @@ class ClinicWorkflowService:
 
             if not active:
                 raise MCPWorkflowError(
-                    f"مفيش مواعيد متاحة في هذه العيادة من {date_from} لـ {date_to}.",
+                    f"معلش يا فندم، دورت كويس في المستشفى ومش لاقي مواعيد متاحة للعيادة دي من {date_from} لـ {date_to}. ممكن حضرتك تتواصل مع الاستقبال للتأكد أو لتسجيل اسمك في قائمة الانتظار.",
                     reason="empty_schedule_response")
 
             # Cap to 9 doctors — prevents token overflow on large clinics (dental, etc.)
@@ -1271,7 +1279,7 @@ class ClinicWorkflowService:
             details={"clinic_id": clinic_id, "provider_id": provider_id,
                      "date_from": date_from, "slots": len(resp.slots)}))
         if not resp.slots:
-            raise MCPWorkflowError("مفيش مواعيد متاحة للدكتور ده في الفترة دي.", reason="empty_schedule_response")
+            raise MCPWorkflowError("بعتذر جداً، مفيش مواعيد مسجلة للدكتور ده في الفترة دي. تقدر حضرتك تتواصل مع الاستقبال وهما هيساعدوك في حجز أقرب موعد متاح.", reason="empty_schedule_response")
         context = _format_schedule_context(resp, provider_entry)
         docs = [Document(page_content=context, metadata={"source": "mcp.provider_schedule"})]
         if rad_doc:
@@ -1289,7 +1297,7 @@ class ClinicWorkflowService:
     ) -> Tuple[List[Document], List[ToolAuditEntry]]:
         clinic_id, _, provider_entry = await self._resolve_entities(state, audit, question)
         if not clinic_id:
-            raise MCPWorkflowError("محتاج اسم العيادة عشان أعرف مين موجود.", reason="missing_clinic")
+            raise MCPWorkflowError("تحت أمرك، بس ياريت توضحلي اسم العيادة عشان أقدر أشوفلك مين من الدكاترة موجود.", reason="missing_clinic")
 
         base_dt = now_dt or _cairo_now()
         day_id = _infer_target_day_id(question, now_dt=base_dt, date_hint=date_hint)
@@ -1337,7 +1345,7 @@ class ClinicWorkflowService:
             details={"clinic_id": clinic_id, "day_id": day_id, "date": date_from, "present": len(present)}))
 
         if not present:
-            raise MCPWorkflowError(f"مفيش دكاترة موجودين في هذه العيادة في {date_from}.",
+            raise MCPWorkflowError(f"معلش يا فندم، المستشفى مش مسجلة إن فيه دكاترة موجودين في العيادة دي في {date_from}. ممكن تتواصل مع الاستقبال للتأكد من الجدول.",
                 reason="empty_schedule_response")
 
         clinic_label = state.entities.clinic or "العيادة"
@@ -1377,7 +1385,7 @@ class ClinicWorkflowService:
             details={"total": len(provider_list.providers), "filtered": len(filtered.providers)}))
 
         if not filtered.providers:
-            raise MCPWorkflowError("مش لاقي دكاترة مسجلين.", reason="provider_not_found")
+            raise MCPWorkflowError("عفواً يا فندم، مش لاقي أسماء الدكاترة دي في المستشفى. ممكن حضرتك تتأكد من الاسم أو تتواصل مع الاستقبال للمساعدة.", reason="provider_not_found")
         context = _format_provider_list(filtered)
         return [Document(page_content=context, metadata={"source": "mcp.provider_list"})], audit
 
@@ -1491,7 +1499,7 @@ class ClinicWorkflowService:
                         reason="clinic_ambiguous",
                         data={"candidates": [c.__dict__ for c in (match.candidates or [])]})
                 elif match.status not in (HybridMatchStatus.UNAMBIGUOUS_MATCH,):
-                    raise MCPWorkflowError(f"مش لاقي عيادة بـ '{clinic_name}'. ممكن تكتب الاسم بالكامل؟",
+                    raise MCPWorkflowError(f"معلش يا فندم، دورت ومش لاقي عيادة بالاسم ده في المستشفى. ممكن حضرتك تتأكد من اسم العيادة أو تتواصل مع الاستقبال لمساعدتك؟",
                         reason="clinic_not_found")
             except MCPWorkflowError:
                 raise
@@ -1529,7 +1537,7 @@ class ClinicWorkflowService:
                     state.entities.doctor = None
                     state.entities.provider_id = None
                     raise MCPWorkflowError(
-                        f"معلش يا فندم دورت كويس في النظام ومش لاقي دكتور بالاسم ده عندنا. ممكن حضرتك تتأكد من الاسم تاني أو تتواصل مع الاستقبال؟",
+                        f"معلش يا فندم دورت كويس ومش لاقي دكتور بالاسم ده في المستشفى. ممكن حضرتك تتأكد من الاسم تاني أو تتواصل مع الاستقبال؟",
                         reason="doctor_not_found"
                     )
 
