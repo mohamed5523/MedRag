@@ -488,6 +488,30 @@ def _safe_parse_int(value: Any) -> Optional[int]:
     except (ValueError, TypeError): return None
 
 
+def _detect_period(question: str) -> str:
+    q = (question or "").casefold()
+    if any(kw in q for kw in ["صباح", "الصبح", "بدري", "بالنهار", "النهار", "الضهر", "اول اليوم", "أول اليوم", "صباحية", "الصباحية"]):
+        return "morning"
+    if any(kw in q for kw in ["مساء", "بالليل", "بليل", "بعد الضهر", "العصر", "المغرب", "العشا", "اخر اليوم", "آخر اليوم", "مسائية", "المسائية"]):
+        return "evening"
+    if any(kw in q for kw in ["كله", "كامل", "اليوم كله", "كل المواعيد", "اي وقت", "أي وقت", "كلها", "الكل", "مش فارقة", "مش فارقه", "اي حاجة", "أي حاجة", "المتاح", "الموجود"]):
+        return "explicit_all"
+    return "unspecified"
+
+
+def _filter_slots_by_period(slots: list, period: str) -> list:
+    if period in ("unspecified", "explicit_all"):
+        return slots
+    filtered = []
+    for s in slots:
+        t = _time_str_to_minutes(getattr(s, "shift_start", "") or "")
+        if period == "morning" and t < 15 * 60:
+            filtered.append(s)
+        elif period == "evening" and t >= 14 * 60:
+            filtered.append(s)
+    return filtered
+
+
 # =============================================================================
 # Formatting helpers
 # =============================================================================
@@ -1217,7 +1241,15 @@ class ClinicWorkflowService:
             rad_doc = Document(page_content=get_radiology_context(question),
                 metadata={"source": "radiology.knowledge"})
 
+        period = _detect_period(question)
+
         if not provider_id:
+            if period == "unspecified":
+                raise MCPWorkflowError(
+                    "تحب المواعيد الفترة الصباحية ولا المسائية ولا تحب أعرضلك مواعيد اليوم كله؟ 😊",
+                    reason="missing_period"
+                )
+
             try:
                 provider_list = await self._client.get_clinic_provider_list()
                 clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
@@ -1226,6 +1258,8 @@ class ClinicWorkflowService:
 
             bulk = await self._client.get_clinic_provider_schedule(
                 clinic_id=clinic_id, provider_id=None, date_from=date_from, date_to=date_to)
+
+            bulk.slots = _filter_slots_by_period(bulk.slots, period)
 
             slots_by_provider: Dict[int, List] = defaultdict(list)
             for slot in bulk.slots:
@@ -1244,6 +1278,7 @@ class ClinicWorkflowService:
                             resp = await self._client.get_clinic_provider_schedule(
                                 clinic_id=clinic_id, provider_id=p.provider_id,
                                 date_from=date_from, date_to=date_to)
+                            resp.slots = _filter_slots_by_period(resp.slots, period)
                             return p, resp
                         except Exception:
                             return p, ProviderScheduleResponse(slots=[])
@@ -1275,6 +1310,7 @@ class ClinicWorkflowService:
 
         resp = await self._client.get_clinic_provider_schedule(
             clinic_id=clinic_id, provider_id=provider_id, date_from=date_from, date_to=date_to)
+        resp.slots = _filter_slots_by_period(resp.slots, period)
         audit.append(ToolAuditEntry(name="get_clinic_provider_schedule", status="success",
             details={"clinic_id": clinic_id, "provider_id": provider_id,
                      "date_from": date_from, "slots": len(resp.slots)}))
@@ -1303,6 +1339,13 @@ class ClinicWorkflowService:
         day_id = _infer_target_day_id(question, now_dt=base_dt, date_hint=date_hint)
         date_from, date_to, _, _ = _infer_date_range(question, now_dt=base_dt, date_hint=date_hint)
 
+        period = _detect_period(question)
+        if period == "unspecified":
+            raise MCPWorkflowError(
+                "تحب الدكاترة الموجودين الفترة الصباحية ولا المسائية ولا أعرضلك اليوم كله؟ 😊",
+                reason="missing_period"
+            )
+
         try:
             provider_list = await self._client.get_clinic_provider_list()
             clinic_providers = _filter_provider_list_by_clinic_id(provider_list, clinic_id).providers
@@ -1311,6 +1354,8 @@ class ClinicWorkflowService:
 
         bulk = await self._client.get_clinic_provider_schedule(
             clinic_id=clinic_id, provider_id=None, date_from=date_from, date_to=date_to)
+            
+        bulk.slots = _filter_slots_by_period(bulk.slots, period)
 
         slots_by_provider: Dict[int, List] = defaultdict(list)
         for slot in bulk.slots:
@@ -1332,6 +1377,7 @@ class ClinicWorkflowService:
                         resp = await self._client.get_clinic_provider_schedule(
                             clinic_id=clinic_id, provider_id=p.provider_id,
                             date_from=date_from, date_to=date_to)
+                        resp.slots = _filter_slots_by_period(resp.slots, period)
                         return p, resp
                     except Exception:
                         return p, ProviderScheduleResponse(slots=[])
@@ -1412,6 +1458,9 @@ class ClinicWorkflowService:
         try:
             bulk = await self._client.get_clinic_provider_schedule(
                 clinic_id=clinic_id, provider_id=None, date_from=date_from, date_to=date_to)
+            
+            period = _detect_period(question)
+            bulk.slots = _filter_slots_by_period(bulk.slots, period)
         except Exception:
             return []
 
